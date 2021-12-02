@@ -80,8 +80,8 @@ You will get prompted for the Crypt4GH passphrase
 
 ## Todo
 
-[-] Compile for MacOS
-[-] Create documentation on ReadTheDocs
-[-] Handle the SSH/Crypt4GH keys internally or externally?
-[-] For MacOS, readdir_plus is missing, so we can implement it using readdir and an attribute cache.
-[-] Remove the passphrase prompt if the key is not locked (Not recommended).
+
+- [ ] Compile for MacOS
+- [ ] Create documentation on ReadTheDocs
+- [ ] Handle the SSH/Crypt4GH keys internally or externally?
+- [ ] Remove the passphrase prompt if the key is not locked (Not recommended).
