@@ -73,6 +73,3 @@ depend-check: depend-rebuild
 	cmp src/.depend src/.depend.bak || (echo src/.depend stale && exit 1)
 
 # @DEPEND@
-
-
-include testing.mk
