@@ -1,0 +1,3 @@
+[submodule "keys"]
+	path = keys
+	url = https://github.com/silverdaz/libcrypt4gh-keys.git
