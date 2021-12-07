@@ -2,8 +2,6 @@
 
 #define _GNU_SOURCE /* avoid implicit declaration of *pt* functions */
 
-#define FUSE_USE_VERSION 34
-
 #define PACKAGE_VERSION "1.0"
 
 #ifdef HAVE_CONFIG_H
@@ -11,8 +9,13 @@
 #endif
 
 #include <fuse.h>
-#include <fuse_opt.h>
 #include <fuse_lowlevel.h>
+
+#ifndef FUSE_VERSION
+#define FUSE_VERSION (FUSE_MAJOR_VERSION * 10 + FUSE_MINOR_VERSION)
+#endif
+
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +24,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
-#include <semaphore.h>
 #include <pthread.h>
 #include <netdb.h>
 #include <signal.h>
@@ -32,14 +34,24 @@
 #include <sys/socket.h>
 #include <sys/utsname.h>
 #include <sys/mman.h>
-#include <poll.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <glib.h>
 #include <limits.h>
+#include <readpassphrase.h>
+
+#include <strings.h>
+#include <libgen.h>
+#include <darwin_compat.h>
+
 
 #ifdef HAVE_PWD_H
 #include <pwd.h>
+#endif
+
+#ifdef HAVE_GRP_H
+#include <grp.h>
 #endif
 
 #include <sodium.h>
@@ -60,20 +72,6 @@
 
 # define __attribute__(x)
 # define __nonnull__(x)
-
-#ifdef HAVE_READPASSPHRASE
-#include <readpassphrase.h>
-#else
-/* use the BSD function in readpassphrase.c */
-#define RPP_ECHO_OFF    0x00		/* Turn off echo (default). */
-#define RPP_ECHO_ON     0x01		/* Leave echo on. */
-#define RPP_REQUIRE_TTY 0x02		/* Fail if there is no tty. */
-#define RPP_FORCELOWER  0x04		/* Force input to lower case. */
-#define RPP_FORCEUPPER  0x08		/* Force input to upper case. */
-#define RPP_SEVENBIT    0x10		/* Strip the high bit from input. */
-#define RPP_STDIN       0x20		/* Read from stdin, not /dev/tty */
-char* readpassphrase(const char *prompt, char *buf, size_t bufsiz, int flags);
-#endif
 
 #ifndef MAP_LOCKED
 #  define MAP_LOCKED 0
@@ -166,6 +164,7 @@ struct ega_config {
   char *mountpoint;
   char *host;
   char *base_path;
+  mode_t mnt_mode;
 
   unsigned int dir_cache;
   unsigned int file_cache;

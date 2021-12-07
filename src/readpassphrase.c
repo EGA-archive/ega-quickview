@@ -45,6 +45,10 @@
 #  define _POSIX_VDISABLE       VDISABLE
 #endif
 
+#if !defined(_ANSI_SOURCE) && defined(_DARWIN_C_SOURCE)
+#define _NSIG __DARWIN_NSIG
+#endif
+
 static volatile sig_atomic_t signo[_NSIG];
 
 static void handler(int s){ signo[s] = 1; }

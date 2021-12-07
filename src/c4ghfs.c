@@ -92,7 +92,7 @@ c4gh_file_handle_free(struct c4gh_file *node)
 
 
 static void *
-c4gh_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
+c4gh_init(struct fuse_conn_info *conn)
 {
   D1("INIT");
   void *res = NULL;
@@ -101,10 +101,7 @@ c4gh_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   pthread_mutex_init(&c4gh.lock, NULL);
 
   if(c4gh.next_oper->init)
-    res = c4gh.next_oper->init(conn, cfg);
-	
-  // c4gh requires a path for each request
-  cfg->nullpath_ok = 0;
+    res = c4gh.next_oper->init(conn);
 
   return res;
 }
@@ -143,27 +140,32 @@ c4gh_size(size_t encrypted_filesize)
 static inline int update_header_hint(const char* path);
 static inline int c4gh_fetch_header(const char* path, uint8_t **h, unsigned int *hlen, struct fuse_file_info *fi);
 
+
 static int
-c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
+is_dotted(const char *p)
+//__attribute__((nonnull))
 {
-  D1("GETATTR %s", path);
+  while(1){
+    while(*p && *p++ != '/'); /* find / */
+    D2("     is_dotted %s\n", p);
+    if(*p == '\0')
+      return 0;
+    if(*p == '.')
+      return 1;
+    p++;
+  }
+}
 
-  /* fi will always be NULL if the file is not currently open, but may also be NULL if the file is open.
-   *
-   * Therefore, we do the following dance and put back the underlying fi as it should be
-   */
+static int
+c4gh_getattr(const char *path, struct stat *stbuf)
+{
 
-  struct fuse_file_info fi_copy;
-  struct fuse_file_info *fi2 = NULL;
-  struct c4gh_file *cfi = NULL;
-  if(fi){
-    fi_copy = *fi;
-    fi2 = &fi_copy;
-    cfi = (struct c4gh_file *)fi->fh;
+  if(path && is_dotted(path)){
+    D2("NOPE ---------------- %s\n", path);
+    return -ENOENT;
   }
 
-  if(cfi)
-    fi_copy.fh = cfi->fi.fh;
+  D1("GETATTR %s", path);
 
   /* This is a bit ugly. Someone please help.
    * We don't know when we should add the .c4gh extension.
@@ -178,14 +180,14 @@ c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 
   if(plen < sizeof("/EGADxxxxxxxxxxx")){
     D2("passing through");
-    err = c4gh.next_oper->getattr(path, stbuf, fi2);
+    err = c4gh.next_oper->getattr(path, stbuf);
   } else {
     D2("adding extension");
     char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
     memcpy(c4gh_path, path, plen);
     memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
     c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
-    err = c4gh.next_oper->getattr(c4gh_path, stbuf, fi2);
+    err = c4gh.next_oper->getattr(c4gh_path, stbuf);
   }
 
   /* adjust the size if it's a file */
@@ -294,7 +296,7 @@ c4gh_fetch_header(const char *path,
    * For the moment, we pull the bytes little at a time.
    */
 
-  uint8_t *header = NULL, *p = NULL;
+  char *header = NULL, *p = NULL;
   unsigned int header_size = 0;
 
   header = calloc(16, sizeof(uint8_t));
@@ -379,7 +381,7 @@ error:
 
   /* save the results */
   if(h)
-    *h = header;
+    *h = (uint8_t*)header;
   else
     free(header); /* we were not interested in keeping it, we only wanted its size */
 
@@ -465,14 +467,14 @@ __attribute__((nonnull))
 
   off_t offset = idx * CRYPT4GH_CIPHERSEGMENT_SIZE + cfi->header_size;
 
-  D2("Pulling segment %zu at position: %zu", idx, offset);
+  D2("Pulling segment %lld at position: %lld", idx, offset);
 
   /* We loop until we pulled a full segment.
    * In case we pull less, we pull again and stop if we receive a zero-byte response.
    */
   while(requested > 0){
     len = c4gh.next_oper->read(path,
-			       cfi->ciphersegment + received,  /* where to put the data */
+			       (char*)(cfi->ciphersegment + received),  /* where to put the data */
 			       requested,                      /* requested amount      */
 			       offset + received,              /* shift                 */
 			       &cfi->fi);
@@ -491,7 +493,7 @@ __attribute__((nonnull))
 
   cfi->ciphersegment_len = received;
 
-  D3("Pulling segment %zu received %u bytes", idx, received);
+  D3("Pulling segment %lld received %u bytes", idx, received);
   return received;
 }
 
@@ -541,7 +543,7 @@ static int
 c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
 
-  D1("READ offset: %zu | size: %zu | %s", offset, size, path);
+  D1("READ offset: %lld | size: %zu | %s", offset, size, path);
 
   int err = -EIO;
   struct c4gh_file *cfi = (struct c4gh_file*) fi->fh;
@@ -563,7 +565,7 @@ c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
   ssize_t end = cfi->filesize - offset;
 
   if(end <= 0){ /* Reading passed the end */
-    D2("Reading passed the end: offset %zu > filesize: %zu", offset, cfi->filesize);
+    D2("Reading passed the end: offset %lld > filesize: %zu", offset, cfi->filesize);
     return 0;
   }
 
@@ -693,7 +695,7 @@ remove_extension(const char *name)
 }
 
 static int
-c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, enum fuse_fill_dir_flags flags)
+c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off)
 {
   D2("FILLER %s", name);
 
@@ -703,7 +705,7 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
   if(!stbuf){
     char *dname = remove_extension(name);
     if(dname){
-      err = h->filler(h->buf, dname, stbuf, off, flags);
+      err = h->filler(h->buf, dname, stbuf, off);
       free(dname);
     }
     return err;
@@ -717,16 +719,16 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
 
   if(!S_ISREG(s.st_mode)){ /* not a reg file */
     D2("FILLER | not a regular file");
-    return h->filler(h->buf, name, &s, off, flags);
+    return h->filler(h->buf, name, &s, off);
   }
 	
   /* It's a file: adjust name and size */
-  D2("FILLER | regular file: %s | encrypted size: %zu", name, stbuf->st_size);
+  D2("FILLER | regular file: %s | encrypted size: %lld", name, stbuf->st_size);
   char *dname = remove_extension(name);
   if(dname){
     s.st_size = c4gh_size(stbuf->st_size); 
-    D2("FILLER with name: %s | decrypted size: %zu", dname, s.st_size);
-    err = h->filler(h->buf, dname, &s, off, flags);
+    D2("FILLER with name: %s | decrypted size: %lld", dname, s.st_size);
+    err = h->filler(h->buf, dname, &s, off);
     free(dname);
   }
   return err;
@@ -734,15 +736,14 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
 
 static int
 c4gh_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-	     off_t offset, struct fuse_file_info *fi,
-	     enum fuse_readdir_flags flags)
+	     off_t offset, struct fuse_file_info *fi)
 {
-  D1("READDIR %s | offset: %zu", path, offset);
+  D1("READDIR %s | offset: %lld", path, offset);
   struct c4gh_readdir_handle h;
   //h.path = path,
   h.buf = buf;
   h.filler = filler;
-  return c4gh.next_oper->readdir(path, &h, c4gh_filler, offset, fi, flags);
+  return c4gh.next_oper->readdir(path, &h, c4gh_filler, offset, fi);
 }
 
 static int c4gh_statfs(const char *path, struct statvfs *buf)
@@ -775,6 +776,11 @@ c4gh_wrap(struct fuse_operations *oper)
   c4gh_oper.release    = c4gh_release;
 
   c4gh_oper.statfs     = c4gh_statfs;
+
+#if FUSE_VERSION >= 29
+  c4gh_oper.flag_nullpath_ok = 0;
+  c4gh_oper.flag_nopath = 0;
+#endif
 
   return &c4gh_oper;
 }

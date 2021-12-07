@@ -6,5 +6,6 @@ src/c4ghfs.o: src/includes.h src/config.h src/crypt4gh.h src/sshfs/cache.h src/s
 src/header.o: src/includes.h src/config.h src/crypt4gh.h src/sshfs/cache.h src/sshfs/sshfs.h src/c4ghfs.h
 src/main.o: src/includes.h src/config.h src/crypt4gh.h src/sshfs/cache.h src/sshfs/sshfs.h src/c4ghfs.h
 src/readpassphrase.o: src/includes.h src/config.h src/crypt4gh.h src/sshfs/cache.h src/sshfs/sshfs.h src/c4ghfs.h
-src/sshfs/cache.o: src/includes.h src/config.h src/crypt4gh.h src/sshfs/cache.h src/sshfs/sshfs.h src/c4ghfs.h
+src/sshfs/cache.o: src/sshfs/cache.h
+src/sshfs/compat/darwin_compat.o: src/sshfs/compat/darwin_compat.h
 src/sshfs/sshfs.o: src/includes.h src/config.h src/crypt4gh.h src/sshfs/cache.h src/sshfs/sshfs.h src/c4ghfs.h

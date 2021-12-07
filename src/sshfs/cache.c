@@ -20,7 +20,6 @@
 #define DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS 5
 
 struct cache {
-	int on;
 	int debug;
 	unsigned int stat_timeout_secs;
 	unsigned int dir_timeout_secs;
@@ -147,11 +146,11 @@ static struct node *cache_get(const char *path)
 
 void cache_add_attr(const char *path, const struct stat *stbuf)
 {
-  if(stbuf)
-    D1("Adding %s -> attr(st_ino=%lu)", path, stbuf->st_ino);
-  else
+  if(stbuf){
+    D1("Adding %s -> attr(st_ino=%llu)", path, stbuf->st_ino);
+  } else {
     D1("Adding %s -> attr(none)", path);
-
+  }
 	struct node *node;
 
 	pthread_mutex_lock(&cache.lock);
@@ -205,14 +204,10 @@ static int cache_get_attr(const char *path, struct stat *stbuf)
 	return err;
 }
 
-static void *cache_init(struct fuse_conn_info *conn,
-                        struct fuse_config *cfg)
+static void *cache_init(struct fuse_conn_info *conn)
 {
 	void *res;
-	res = cache.next_oper->init(conn, cfg);
-
-	// Cache requires a path for each request
-	cfg->nullpath_ok = 0;
+	res = cache.next_oper->init(conn);
 
 	pthread_mutex_init(&cache.lock, NULL);
 	cache.table = g_hash_table_new_full(g_str_hash, g_str_equal,
@@ -235,13 +230,12 @@ static void cache_destroy(void *userdata)
 }
 
 
-static int cache_getattr(const char *path, struct stat *stbuf,
-			 struct fuse_file_info *fi)
+static int cache_getattr(const char *path, struct stat *stbuf)
 {
         D1("GETATTR %s", path);
 	int err = cache_get_attr(path, stbuf);
 	if (err) {
-		err = cache.next_oper->getattr(path, stbuf, fi);
+		err = cache.next_oper->getattr(path, stbuf);
 		D2("from underlying fs: %s", strerror((err>0)?err:-err));
 		if (!err)
 			cache_add_attr(path, stbuf);
@@ -282,15 +276,14 @@ static int cache_releasedir(const char *path, struct fuse_file_info *fi)
 }
 
 static int cache_dirfill (void *buf, const char *name,
-			  const struct stat *stbuf, off_t off,
-			  enum fuse_fill_dir_flags flags)
+			  const struct stat *stbuf, off_t off)
 {
   D2("FILLER %s", name);
 	int err;
 	struct readdir_handle *ch;
 
 	ch = (struct readdir_handle*) buf;
-	err = ch->filler(ch->buf, name, stbuf, off, flags);
+	err = ch->filler(ch->buf, name, stbuf, off);
 	if (!err) {
 		g_ptr_array_add(ch->dir, g_strdup(name));
 		if (stbuf->st_mode & S_IFMT) {
@@ -306,8 +299,7 @@ static int cache_dirfill (void *buf, const char *name,
 }
 
 static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-			 off_t offset, struct fuse_file_info *fi,
-			 enum fuse_readdir_flags flags)
+			 off_t offset, struct fuse_file_info *fi)
 {
         D1("READDIR %s", path);
 	struct readdir_handle ch;
@@ -325,7 +317,7 @@ static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		if (node->dir_valid - now >= 0) {
 			for(dir = node->dir; *dir != NULL; dir++)
 				// FIXME: What about st_mode?
-				filler(buf, *dir, NULL, 0, 0);
+				filler(buf, *dir, NULL, 0);
 			pthread_mutex_unlock(&cache.lock);
 			return 0;
 		}
@@ -349,7 +341,7 @@ static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	ch.buf = buf;
 	ch.filler = filler;
 	ch.dir = g_ptr_array_new();
-	err = cache.next_oper->readdir(path, &ch, cache_dirfill, offset, fi, flags);
+	err = cache.next_oper->readdir(path, &ch, cache_dirfill, offset, fi);
 	g_ptr_array_add(ch.dir, NULL);
 	dir = (char **) ch.dir->pdata;
 	if (!err) {
@@ -381,6 +373,11 @@ struct fuse_operations *cache_wrap(struct fuse_operations *oper)
   cache_oper.read     = oper->read;
   cache_oper.release  = oper->release;
   cache_oper.statfs   = oper->statfs;
+
+#if FUSE_VERSION >= 29
+  cache_oper.flag_nullpath_ok = 0;
+  cache_oper.flag_nopath = 0;
+#endif
   
   return &cache_oper;
 }
