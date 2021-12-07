@@ -88,7 +88,7 @@ You will get prompted for the Crypt4GH passphrase
 ## Todo
 
 
-- [ ] Compile for MacOS
+- [x] Compile for MacOS
 - [ ] Create documentation on ReadTheDocs
 - [ ] Handle the SSH/Crypt4GH keys internally or externally?
 - [ ] Remove the passphrase prompt if the key is not locked (Not recommended).
