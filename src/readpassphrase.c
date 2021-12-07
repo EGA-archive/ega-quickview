@@ -25,7 +25,7 @@
 
 #include "includes.h"
 
-#ifndef HAVE_READPASSPHRASE
+#ifndef HAVE_READPASSPHRASE_H
 
 #include <termios.h>
 #include <signal.h>
@@ -196,4 +196,4 @@ restart:
 }
 
 
-#endif /* HAVE_READPASSPHRASE */
+#endif /* ! HAVE_READPASSPHRASE_H */

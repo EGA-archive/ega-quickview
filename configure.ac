@@ -13,7 +13,6 @@ AC_CONFIG_HEADERS([src/config.h])
 AC_LANG([C])
 
 AC_PROG_CC([cc gcc])
-AC_PROG_CC #([cc clang gcc])
 AC_PROG_CPP
 AC_PROG_AWK
 AC_CHECK_TOOL([PKG_CONFIG], [pkg-config])
@@ -21,24 +20,25 @@ AC_CHECK_TOOL([PKG_CONFIG], [pkg-config])
 AC_C_INLINE
 # AC_C_BIGENDIAN
 
-is_osx="no"
+is_apple="no"
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]], [[
 #ifdef __APPLE__ or __MACH__
 int ok;
 #else
 choke me
 #endif
-]])], [ is_osx="yes" ], [])
+]])], [ is_apple="yes" ], [])
 
 
 # First of all, we need libfuse3, libsodium, glib2.0 and pthreads
 fuse_lib="fuse3"
 fuse_func="fuse_session_mount"
 fuse_link="https://github.com/libfuse/libfuse"
-if test "$is_osx" = "yes"; then
+if test "$is_apple" = "yes"; then
    fuse_lib="fuse"
    fuse_func="fuse_mount"
    fuse_link="https://github.com/osxfuse/fuse"
+   CPPFLAGS="$CPPFLAGS -D_REENTRANT -DFUSE_USE_VERSION=26"
 fi
 
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
@@ -88,8 +88,9 @@ if test "$with_crypt4gh_keys" != "yes"; then
 		[ # Found it
 		  with_crypt4gh_keys=yes
 		  CFLAGS="$saved_CFLAGS -I./keys/src/include"
-		  LDFLAGS="$saved_LDFLAGS -L./keys"
-		  LIBS="$saved_LIBS -lc4gh-keys"
+		  LDFLAGS="$saved_LDFLAGS -L./keys -L./keys/src/openssh -L./keys/src/openbsd-compat"
+		  LIBS="$saved_LIBS -lopenssh -lopenbsd-compat $(${PKG_CONFIG} --libs openssl)"
+		  EXTRA_DEPS="keys/openssh/libopenssh.a keys/openbsd-compat/libopenbsd-compat.a"
 		  AC_MSG_RESULT([yes])
 		],
 		[ AC_MSG_RESULT([no]) ])
@@ -189,6 +190,7 @@ fi
 AC_CHECK_HEADERS([ \
 	readpassphrase.h \
 	pwd.h \
+	grp.h \
 ])
 
 #######################################################
@@ -300,6 +302,7 @@ AC_ARG_WITH([header-size],
 
 #######################################################
 
+AC_SUBST([EXTRA_DEPS], [$EXTRA_DEPS])
 AC_SUBST([DEBUG], [$DEBUG])
 AC_SUBST([DEPEND], [$(cat $srcdir/src/.depend)])
 
@@ -317,10 +320,5 @@ AC_OUTPUT
    echo "         Definitions: ${DEFS} $DEBUG"
    echo "        Linker flags: ${LDFLAGS}"
    echo "                LIBS: ${LIBS}"
-if test "$is_osx" = "yes"; then
-   echo "                  OS: OSX"
-else
-   echo "                  OS: Linux"
-fi
    echo ""
 #fi

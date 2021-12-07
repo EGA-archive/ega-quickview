@@ -62,6 +62,9 @@ Finally, you can compile the EGA-qv code with:
 	make
 	make install
 
+On macOS, if you can't find Openssl, please use pkg-config and adjust the `PKG_CONFIG_PATH` like:
+
+	export PKG_CONFIG_PATH="$(brew --prefix openssl@1.1)/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 ## Example
 

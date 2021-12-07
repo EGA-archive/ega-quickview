@@ -39,12 +39,15 @@
 #include <netinet/tcp.h>
 #include <glib.h>
 #include <limits.h>
-#include <readpassphrase.h>
 
 #include <strings.h>
 #include <libgen.h>
-#include <darwin_compat.h>
 
+#ifdef __APPLE__
+#include "compat/darwin_compat.h"
+#else
+#include <semaphore.h>
+#endif
 
 #ifdef HAVE_PWD_H
 #include <pwd.h>
@@ -187,5 +190,5 @@ extern struct ega_config config;
 #include "sshfs/cache.h"
 #include "sshfs/sshfs.h"
 #include "c4ghfs.h"
-
+#include "readpassphrase.h"
 
