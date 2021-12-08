@@ -50,16 +50,7 @@ If the ldconfig command doesn't print the name `libfuse3.so`, you probably need 
 > Note: [Security implications for fusermount3](https://github.com/libfuse/libfuse/tree/fuse-3.10.5#security-implications)
 
 
-We then need to handle the Crypt4GH keys. The code for them is externalized in libc4gh-keys, or available in the submodule [./keys](./keys)
-
-	pushd ./keys
-	autoreconf
-	./configure    # you might need to adjust the location of OpenSSL with --with-openssl=<path>
-	make
-	make install   # optional. We'll find the library in this directory if you don't install it
-	popd
-
-Finally, you can compile the EGA-qv code with:
+You can then compile the EGA-qv code with:
 
 	autoreconf
 	./configure
@@ -69,6 +60,8 @@ Finally, you can compile the EGA-qv code with:
 On macOS, if you can't find Openssl, please use pkg-config and adjust the `PKG_CONFIG_PATH` like:
 
 	export PKG_CONFIG_PATH="$(brew --prefix openssl@1.1)/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+and you might call `./configure --with-openssl=$(brew --prefix openssl@1.1)` instead.
 
 ## Example
 
@@ -90,5 +83,5 @@ You will get prompted for the Crypt4GH passphrase
 
 - [x] Compile for MacOS
 - [ ] Create documentation on ReadTheDocs
-- [ ] Handle the SSH/Crypt4GH keys internally or externally?
+- [x] Handle the SSH/Crypt4GH keys internally or externally
 - [ ] Remove the passphrase prompt if the key is not locked (Not recommended).

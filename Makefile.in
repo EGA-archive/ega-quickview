@@ -1,11 +1,11 @@
 
 CC       = @CC@
-CPPFLAGS = -I@srcdir@/src @CPPFLAGS@ -fPIC
+CPPFLAGS = -Isrc -Ikeys/include @CPPFLAGS@ -fPIC
 CFLAGS   = -Wno-unused-result @CFLAGS@ @CPPFLAGS@ @DEFS@ @DEBUG@
 LIBS     = @LIBS@
-LDFLAGS  = @LDFLAGS@ -L./keys -lc4gh-keys
+LDFLAGS  = @LDFLAGS@ -Lkeys -lc4gh-keys -Lkeys/openssh -lopenssh -Lkeys/openbsd-compat -lopenbsd-compat
 
-EXTRA_DEPS = keys/libc4gh-keys.a @EXTRA_DEPS@
+EXTRA_LIBS = keys/libc4gh-keys.a keys/openssh/libopenssh.a keys/openbsd-compat/libopenbsd-compat.a
 
 prefix=@prefix@
 exec_prefix=@exec_prefix@
@@ -25,11 +25,11 @@ all: $(TARGET)
 $(libdir) $(bindir):
 	mkdir -p $@
 
-$(EXTRA_DEPS):
-	@echo "Creating dependency $@"
-	@make -s -C keys extra_libs
+$(EXTRA_LIBS):
+	@echo "Creating dependency $(@:keys/%=%)"
+	@make -s -C keys $(@:keys/%=%)
 
-$(TARGET): $(OBJS) $(EXTRA_DEPS)
+$(TARGET): $(OBJS) $(EXTRA_LIBS)
 	@echo "Creating target $@"
 	@$(CC) -o $@ $(OBJS) $(LDFLAGS) $(LIBS)
 
@@ -37,21 +37,12 @@ $(TARGET): $(OBJS) $(EXTRA_DEPS)
 	@echo "Compiling $<"
 	@$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-install-c4gh-keys: ./keys/libc4gh-keys.so | $(libdir)
-	@echo "Installing $< into $(libdir)"
-	@install -m 755 $< $(libdir)
-
-install: install-c4gh-keys
-install: $(TARGET) | $(bindir)
-	@echo "Installing $< into $(bindir)"
-	@install -m 755 $< $(bindir)
-
 clean:
 	-rm -f $(OBJS) $(TARGET)
 	-@rm -f *~ 
 
 veryclean: clean
-	-make -C $(KEYS_SRCDIR) veryclean
+	-make -C keys veryclean
 
 distclean: clean
 	-rm -f Makefile src/config.h* config.status configure config.log
