@@ -31,7 +31,7 @@ solution, and decrypt the files locally with [Crypt4GH](https://crypt4gh.readthe
 
 We need a few required packages (gcc, make, libsodium, libfuse, autoconf...)
 
-	brew install makedepend macfuse libsodium openssl
+	brew install macfuse libsodium openssl
 
 
 You can then compile the EGA-qv code with:
