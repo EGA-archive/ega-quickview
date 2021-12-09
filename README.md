@@ -31,31 +31,14 @@ solution, and decrypt the files locally with [Crypt4GH](https://crypt4gh.readthe
 
 We need a few required packages (gcc, make, libsodium, libfuse, autoconf...)
 
-	apt install autoconf gcc make git meson pkg-config xutils-dev libssl-dev libsodium-dev libglib2.0-dev
-
-To install [libfuse (version 3.10.5)](https://github.com/libfuse/libfuse):
-
-	git clone --branch fuse-3.10.5 https://github.com/libfuse/libfuse.git /var/src/libfuse
-	mkdir /var/src/libfuse/build
-	pushd /var/src/libfuse/build
-	meson ..
-	#python3 -m pytest test/ # optional
-	ninja install
-	popd
-	ldconfig -v | grep libfuse3
-
-If the ldconfig command doesn't print the name `libfuse3.so`, you probably need to update a file in `/etc/ld.so.conf.d/` with the path to where the library was install (for example: in `/usr/local/lib64`).
-
-
-> Note: [Security implications for fusermount3](https://github.com/libfuse/libfuse/tree/fuse-3.10.5#security-implications)
+	brew install makedepend macfuse libsodium openssl
 
 
 You can then compile the EGA-qv code with:
 
-	autoreconf
+	autoreconf -i
 	./configure
 	make
-	make install
 
 On macOS, if you can't find Openssl, please use pkg-config and adjust the `PKG_CONFIG_PATH` like:
 
