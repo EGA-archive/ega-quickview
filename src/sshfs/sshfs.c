@@ -161,7 +161,6 @@ struct sshfs {
 	unsigned max_outstanding_len;
 	pthread_cond_t outstanding_cond;
 
-	int ext_posix_rename;
 	int ext_statvfs;
 
 	/* statistics */
@@ -1136,10 +1135,6 @@ static int sftp_init_reply_ok(struct conn *conn, struct buffer *buf,
 
 			D1("Extension: %s <%s>", ext, extdata);
 
-			if (strcmp(ext, SFTP_EXT_POSIX_RENAME) == 0 &&
-			    strcmp(extdata, "1") == 0) {
-				sshfs.ext_posix_rename = 1;
-			}
 			if (strcmp(ext, SFTP_EXT_STATVFS) == 0 &&
 			    strcmp(extdata, "2") == 0)
 				sshfs.ext_statvfs = 1;
@@ -2087,8 +2082,7 @@ static int sshfs_statfs(const char *path, struct statvfs *buf)
 	buf->f_namemax = 255;
 	buf->f_bsize = sshfs.blksize;
 	/*
-	 * df seems to use f_bsize instead of f_frsize, so make them
-	 * the same
+	 * df seems to use f_bsize instead of f_frsize, so make them the same
 	 */
 	buf->f_frsize = buf->f_bsize;
 	buf->f_blocks = buf->f_bfree =  buf->f_bavail =

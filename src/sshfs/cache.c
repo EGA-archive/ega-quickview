@@ -14,7 +14,7 @@
 #define D3(format, ...) if(cache.debug > 2) DEBUG_FUNC("\x1b[32m", "[CACHE]", "          " format, ##__VA_ARGS__)
 #define E(fmt, ...) ERROR_FUNC("[CACHE]", fmt, ##__VA_ARGS__)
 
-#define DEFAULT_CACHE_TIMEOUT_SECS            20
+#define DEFAULT_CACHE_TIMEOUT_SECS            300 //20
 #define DEFAULT_MAX_CACHE_SIZE                10000
 #define DEFAULT_CACHE_CLEAN_INTERVAL_SECS     60
 #define DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS 5
@@ -30,6 +30,11 @@ struct cache {
 	GHashTable *table;
 	pthread_mutex_t lock;
 	time_t last_cleaned;
+
+        unsigned int   statvfs_timeout_secs;
+        unsigned int   statvfs_set;
+	time_t         statvfs_valid;
+        struct statvfs statvfs;
 };
 
 static struct cache cache;
@@ -163,6 +168,35 @@ void cache_add_attr(const char *path, const struct stat *stbuf)
 	pthread_mutex_unlock(&cache.lock);
 }
 
+static int cache_get_statvfs(const char *path, struct statvfs *stbuf)
+{
+  int err = -EAGAIN;
+  pthread_mutex_lock(&cache.lock);
+  if (cache.statvfs_set) {
+    time_t now = time(NULL);
+    if (cache.statvfs_valid - now >= 0) {
+      *stbuf = cache.statvfs;
+      err = 0;
+    } else
+      D1("statvfs expired for %s", path);
+  }
+  pthread_mutex_unlock(&cache.lock);
+  return err;
+}
+
+void cache_add_statvfs(const char *path, const struct statvfs *stbuf)
+{
+  if(!stbuf)
+    return;
+
+  pthread_mutex_lock(&cache.lock);
+  cache.statvfs = *stbuf;
+  cache.statvfs_valid = time(NULL) + cache.statvfs_timeout_secs;
+  cache.statvfs_set = 1;
+  pthread_mutex_unlock(&cache.lock);
+}
+
+
 static void cache_add_dir(const char *path, char **dir)
 {
 	struct node *node;
@@ -239,6 +273,19 @@ static int cache_getattr(const char *path, struct stat *stbuf)
 		D2("from underlying fs: %s", strerror((err>0)?err:-err));
 		if (!err)
 			cache_add_attr(path, stbuf);
+	}
+	return err;
+}
+
+static int cache_statfs(const char *path, struct statvfs *buf)
+{
+        D1("STATFS %s", path);
+	int err = cache_get_statvfs(path, buf);
+	if (err) {
+		err = cache.next_oper->statfs(path, buf);
+		D2("from underlying fs: %s", strerror((err>0)?err:-err));
+		if (!err)
+			cache_add_statvfs(path, buf);
 	}
 	return err;
 }
@@ -368,11 +415,12 @@ struct fuse_operations *cache_wrap(struct fuse_operations *oper)
   cache_oper.readdir  = oper->readdir ? cache_readdir : NULL;
   cache_oper.releasedir = cache_releasedir;
 
+  cache_oper.statfs   = cache_statfs;
+
   /* passthrough */
   cache_oper.open     = oper->open;
   cache_oper.read     = oper->read;
   cache_oper.release  = oper->release;
-  cache_oper.statfs   = oper->statfs;
 
 #if FUSE_VERSION >= 29
   cache_oper.flag_nullpath_ok = 0;
@@ -405,8 +453,12 @@ static const struct fuse_opt cache_opts[] = {
 
     CACHE_OPT("dcache_timeout=%u",            stat_timeout_secs,       0),
     CACHE_OPT("dcache_timeout=%u",            dir_timeout_secs,        0),
+    CACHE_OPT("dcache_timeout=%u",            statvfs_timeout_secs,    0),
+
     CACHE_OPT("dcache_stat_timeout=%u",       stat_timeout_secs,       0),
+    CACHE_OPT("dcache_statvfs_timeout=%u",    statvfs_timeout_secs,    0),
     CACHE_OPT("dcache_dir_timeout=%u",        dir_timeout_secs,        0),
+
     CACHE_OPT("dcache_max_size=%u",           max_size,                0),
     CACHE_OPT("dcache_clean_interval=%u",     clean_interval_secs,     0),
     CACHE_OPT("dcache_min_clean_interval=%u", min_clean_interval_secs, 0),
@@ -420,6 +472,7 @@ static const struct fuse_opt cache_opts[] = {
 int cache_parse_options(struct fuse_args *args)
 {
 	cache.stat_timeout_secs = DEFAULT_CACHE_TIMEOUT_SECS;
+	cache.statvfs_timeout_secs = DEFAULT_CACHE_TIMEOUT_SECS;
 	cache.dir_timeout_secs = DEFAULT_CACHE_TIMEOUT_SECS;
 	cache.max_size = DEFAULT_MAX_CACHE_SIZE;
 	cache.clean_interval_secs = DEFAULT_CACHE_CLEAN_INTERVAL_SECS;
