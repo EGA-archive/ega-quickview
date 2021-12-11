@@ -44,7 +44,7 @@ You can then compile the EGA-qv code with:
 	./configure
 	make
 
-and you might need to call `./configure --with-openssl=$(brew --prefix openssl@1.1)` instead, if you can't find Openssl.
+On macOS, you might need to call `./configure --with-openssl=$(brew --prefix openssl@1.1)` instead, if you can't find Openssl.
 
 ## Example
 
