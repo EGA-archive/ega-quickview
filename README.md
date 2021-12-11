@@ -31,7 +31,11 @@ solution, and decrypt the files locally with [Crypt4GH](https://crypt4gh.readthe
 
 We need a few required packages (gcc, make, libsodium, libfuse, autoconf...)
 
-	brew install macfuse libsodium openssl
+    # On Linux (Debian-like)
+	apt install libfuse3-dev autoconf gcc make pkg-config libsodium-dev libssl-dev libglib2.0-dev
+
+    # On macOS
+	brew install macfuse autoconf automake gcc make pkg-config libsodium openssl@1.1 glib
 
 
 You can then compile the EGA-qv code with:
@@ -40,11 +44,7 @@ You can then compile the EGA-qv code with:
 	./configure
 	make
 
-On macOS, if you can't find Openssl, please use pkg-config and adjust the `PKG_CONFIG_PATH` like:
-
-	export PKG_CONFIG_PATH="$(brew --prefix openssl@1.1)/lib/pkgconfig:$PKG_CONFIG_PATH"
-
-and you might call `./configure --with-openssl=$(brew --prefix openssl@1.1)` instead.
+and you might need to call `./configure --with-openssl=$(brew --prefix openssl@1.1)` instead, if you can't find Openssl.
 
 ## Example
 
@@ -55,16 +55,15 @@ The Crypt4GH key must be passed as a `-o` argument, in the options list.
 
 	ega-qv [options] <EGA-server> <mountpoint>
 	
-For example, the user silverdaz can connect (if it is an EGA user), using:
+For example, the user `silverdaz` can connect to `outbox.ega-archive.org`, using:
 
 	ega-qv -o seckey=~/.ssh/c4gh.key silverdaz@outbox.ega-archive.org ~/EGA
 	
-You will get prompted for the Crypt4GH passphrase
+You will get prompted for the Crypt4GH passphrase (and eventually your
+password to connect to the server, unless you used an ssh-key
+(recommended)).
 
 ## Todo
 
-
-- [x] Compile for MacOS
 - [ ] Create documentation on ReadTheDocs
-- [x] Handle the SSH/Crypt4GH keys internally or externally
 - [ ] Remove the passphrase prompt if the key is not locked (Not recommended).
