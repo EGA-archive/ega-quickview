@@ -16,7 +16,7 @@ TARGET=ega-qv
 
 OBJS =  src/sshfs/sshfs.o src/sshfs/cache.o src/compat/darwin_compat.o \
 	src/readpassphrase.o src/header.o \
-	src/c4ghfs.o src/main.o 
+	src/c4ghfs.o src/@EGAQV_MAIN@.o 
 
 .PHONY: $(TARGET)
 

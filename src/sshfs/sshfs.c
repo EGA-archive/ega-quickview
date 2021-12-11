@@ -617,7 +617,11 @@ static int buf_get_entries(struct buffer *buf, void *dbuf,
 			free(longname);
 			err = buf_get_attrs(buf, &stbuf, NULL);
 			if (!err) {
+#ifdef __APPLE__
 				filler(dbuf, name, &stbuf, 0);
+#else
+				filler(dbuf, name, &stbuf, 0, 0);
+#endif
 			}
 		}
 		free(name);
@@ -1626,10 +1630,16 @@ static int sshfs_opendir(const char *path, struct fuse_file_info *fi)
 	return err;
 }
 
+#ifdef __APPLE__
 static int sshfs_readdir(const char *path, void *dbuf, fuse_fill_dir_t filler,
 			 off_t offset, struct fuse_file_info *fi)
+#else
+static int sshfs_readdir(const char *path, void *dbuf, fuse_fill_dir_t filler,
+			 off_t offset, struct fuse_file_info *fi,
+			 enum fuse_readdir_flags flags)
+#endif
 {
-        D1("READDIR %s | offset %lld", path, offset);
+        D1("READDIR %s | offset " OFF_FMT, path, offset);
 	(void) path;
 	int err;
 	struct dir_handle *handle;
@@ -2040,7 +2050,7 @@ static int sshfs_async_read(struct sshfs_file *sf, char *rbuf, size_t size,
 static int sshfs_read(const char *path, char *rbuf, size_t size, off_t offset,
                       struct fuse_file_info *fi)
 {
-        D1("READ %s | offset %lld | size %zu", path, offset, size);
+        D1("READ %s | offset " OFF_FMT " | size %zu", path, offset, size);
 	struct sshfs_file *sf = get_sshfs_file(fi);
 	(void) path;
 
@@ -2091,19 +2101,43 @@ static int sshfs_statfs(const char *path, struct statvfs *buf)
 	return 0;
 }
 
+#ifdef __APPLE__
 static int sshfs_getattr(const char *path, struct stat *stbuf)
+#else
+static int sshfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
+#endif
 {
         D1("GETATTR %s", path);
 	int err;
 	struct buffer buf;
 	struct buffer outbuf;
+	struct sshfs_file *sf = NULL;
+
+#ifndef __APPLE__
+	if (fi != NULL && (sf = get_sshfs_file(fi)) != NULL) {
+	  if (!sshfs_file_is_conn(sf))
+	    return -EIO;
+	}
+#endif
 
 	buf_init(&buf, 0);
-	buf_add_path(&buf, path);
-	err = sftp_request(get_conn(NULL, path), SSH_FXP_LSTAT, &buf, SSH_FXP_ATTRS, &outbuf);
+#ifndef __APPLE__
+	if(sf == NULL) {
+#endif
+		buf_add_path(&buf, path);
+		err = sftp_request(get_conn(sf, path), SSH_FXP_LSTAT, &buf, SSH_FXP_ATTRS, &outbuf);
+#ifndef __APPLE__
+	}
+	else {
+		buf_add_buf(&buf, &sf->handle);
+		err = sftp_request(sf->conn, SSH_FXP_FSTAT, &buf, SSH_FXP_ATTRS, &outbuf);
+	}
+#endif
 	if (!err) {
 		err = buf_get_attrs(&outbuf, stbuf, NULL);
+#ifdef __APPLE__
 		stbuf->st_blksize = 0;
+#endif
 		buf_free(&outbuf);
 	}
 	buf_free(&buf);
@@ -2231,20 +2265,46 @@ int ssh_connect(void)
 	return 0;
 }
 
+#ifdef __APPLE__
 static void *sshfs_init(struct fuse_conn_info *conn)
+#else
+static void *sshfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
+#endif
 {
   D1("INIT");
+
+#ifdef __APPLE__
 	/* Readahead should be done by kernel or sshfs but not both */
 	if (conn->async_read)
 		sshfs.sync_read = 1;
+#else
+  /* Readahead should be done by kernel or sshfs but not both */
+	if (conn->capable & FUSE_CAP_ASYNC_READ)
+		sshfs.sync_read = 1;
+
+	// These workarounds require the "path" argument.
+	cfg->nullpath_ok = 0;
+
+	// When using multiple connections, release() needs to know the path
+	if (sshfs.max_conns > 1)
+		cfg->nullpath_ok = 0;
+
+	// Lookup of . and .. is supported
+	conn->capable |= FUSE_CAP_EXPORT_SUPPORT;
+
+	// SFTP only supports 1-second time resolution
+	conn->time_gran = 1000000000;
+#endif
 
 	if (!sshfs.delay_connect)
 		start_processing_thread(&sshfs.conns[0]);
 
+#ifdef __APPLE__
 #if FUSE_VERSION >= 29
 	// When using multiple connections, release() needs to know the path
 	if (sshfs.max_conns > 1)
 	  sshfs_oper.flag_nullpath_ok = 0;
+#endif
 #endif
 
 	return NULL;
@@ -2288,10 +2348,14 @@ struct fuse_operations sshfs_oper = {
   .release    = sshfs_release,
   .read       = sshfs_read,
   .statfs     = sshfs_statfs,
+
+#ifdef __APPLE__
 #if FUSE_VERSION >= 29
   .flag_nullpath_ok = 1,
   .flag_nopath = 1,
 #endif
+#endif
+
 };
 
 void sshfs_print_options(void)

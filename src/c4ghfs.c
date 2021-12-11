@@ -21,7 +21,6 @@
 #define D3(format, ...) if(c4gh.debug > 2) DEBUG_FUNC("\x1b[35m", "[C4GH]", "          " format, ##__VA_ARGS__)
 #define E(fmt, ...) ERROR_FUNC("[C4GH]", fmt, ##__VA_ARGS__)
 
-
 struct c4gh {
   unsigned int debug;
 
@@ -92,7 +91,11 @@ c4gh_file_handle_free(struct c4gh_file *node)
 
 
 static void *
+#ifdef __APPLE__
 c4gh_init(struct fuse_conn_info *conn)
+#else
+c4gh_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
+#endif
 {
   D1("INIT");
   void *res = NULL;
@@ -100,8 +103,15 @@ c4gh_init(struct fuse_conn_info *conn)
   /* Create the inode->path hash table */
   pthread_mutex_init(&c4gh.lock, NULL);
 
+#ifdef __APPLE__
   if(c4gh.next_oper->init)
     res = c4gh.next_oper->init(conn);
+#else
+  if(c4gh.next_oper->init)
+    res = c4gh.next_oper->init(conn, cfg);
+
+  cfg->nullpath_ok = 0; // c4gh requires a path for each request
+#endif
 
   return res;
 }
@@ -157,7 +167,11 @@ is_dotted(const char *p)
 }
 
 static int
+#ifdef __APPLE__
 c4gh_getattr(const char *path, struct stat *stbuf)
+#else
+c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
+#endif
 {
 
   if(path && is_dotted(path)){
@@ -166,6 +180,25 @@ c4gh_getattr(const char *path, struct stat *stbuf)
   }
 
   D1("GETATTR %s", path);
+
+#ifndef __APPLE__
+  /* fi will always be NULL if the file is not currently open, but may also be NULL if the file is open.
+   *
+   * Therefore, we do the following dance and put back the underlying fi as it should be
+   */
+
+  struct fuse_file_info fi_copy;
+  struct fuse_file_info *fi2 = NULL;
+  struct c4gh_file *cfi = NULL;
+  if(fi){
+    fi_copy = *fi;
+    fi2 = &fi_copy;
+    cfi = (struct c4gh_file *)fi->fh;
+  }
+
+  if(cfi)
+    fi_copy.fh = cfi->fi.fh;
+#endif
 
   /* This is a bit ugly. Someone please help.
    * We don't know when we should add the .c4gh extension.
@@ -180,14 +213,22 @@ c4gh_getattr(const char *path, struct stat *stbuf)
 
   if(plen < sizeof("/EGADxxxxxxxxxxx")){
     D2("passing through");
+#ifdef __APPLE__
     err = c4gh.next_oper->getattr(path, stbuf);
+#else
+    err = c4gh.next_oper->getattr(path, stbuf, fi2);
+#endif
   } else {
     D2("adding extension");
     char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
     memcpy(c4gh_path, path, plen);
     memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
     c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+#ifdef __APPLE__
     err = c4gh.next_oper->getattr(c4gh_path, stbuf);
+#else
+    err = c4gh.next_oper->getattr(c4gh_path, stbuf, fi2);
+#endif
   }
 
   /* adjust the size if it's a file */
@@ -467,7 +508,7 @@ __attribute__((nonnull))
 
   off_t offset = idx * CRYPT4GH_CIPHERSEGMENT_SIZE + cfi->header_size;
 
-  D2("Pulling segment %lld at position: %lld", idx, offset);
+  D2("Pulling segment " OFF_FMT " at position: " OFF_FMT, idx, offset);
 
   /* We loop until we pulled a full segment.
    * In case we pull less, we pull again and stop if we receive a zero-byte response.
@@ -493,7 +534,7 @@ __attribute__((nonnull))
 
   cfi->ciphersegment_len = received;
 
-  D3("Pulling segment %lld received %u bytes", idx, received);
+  D3("Pulling segment " OFF_FMT " received %u bytes", idx, received);
   return received;
 }
 
@@ -543,7 +584,7 @@ static int
 c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
 
-  D1("READ offset: %lld | size: %zu | %s", offset, size, path);
+  D1("READ offset: " OFF_FMT " | size: %zu | %s", offset, size, path);
 
   int err = -EIO;
   struct c4gh_file *cfi = (struct c4gh_file*) fi->fh;
@@ -565,7 +606,7 @@ c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
   ssize_t end = cfi->filesize - offset;
 
   if(end <= 0){ /* Reading passed the end */
-    D2("Reading passed the end: offset %lld > filesize: %zu", offset, cfi->filesize);
+    D2("Reading passed the end: offset " OFF_FMT " > filesize: %zu", offset, cfi->filesize);
     return 0;
   }
 
@@ -695,7 +736,11 @@ remove_extension(const char *name)
 }
 
 static int
+#ifdef __APPLE__
 c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off)
+#else
+c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, enum fuse_fill_dir_flags flags)
+#endif
 {
   D2("FILLER %s", name);
 
@@ -705,7 +750,11 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off)
   if(!stbuf){
     char *dname = remove_extension(name);
     if(dname){
+#ifdef __APPLE__
       err = h->filler(h->buf, dname, stbuf, off);
+#else
+      err = h->filler(h->buf, dname, stbuf, off, flags);
+#endif
       free(dname);
     }
     return err;
@@ -719,31 +768,48 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off)
 
   if(!S_ISREG(s.st_mode)){ /* not a reg file */
     D2("FILLER | not a regular file");
+#ifdef __APPLE__
     return h->filler(h->buf, name, &s, off);
+#else
+    return h->filler(h->buf, name, &s, off, flags);
+#endif
   }
 	
   /* It's a file: adjust name and size */
-  D2("FILLER | regular file: %s | encrypted size: %lld", name, stbuf->st_size);
+  D2("FILLER | regular file: %s | encrypted size: " OFF_FMT, name, stbuf->st_size);
   char *dname = remove_extension(name);
   if(dname){
     s.st_size = c4gh_size(stbuf->st_size); 
-    D2("FILLER with name: %s | decrypted size: %lld", dname, s.st_size);
+    D2("FILLER with name: %s | decrypted size: " OFF_FMT, dname, s.st_size);
+#ifdef __APPLE__
     err = h->filler(h->buf, dname, &s, off);
+#else
+    err = h->filler(h->buf, dname, &s, off, flags);
+#endif
     free(dname);
   }
   return err;
 }
 
 static int
+#ifdef __APPLE__
 c4gh_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	     off_t offset, struct fuse_file_info *fi)
+#else
+c4gh_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+	     off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
+#endif
 {
-  D1("READDIR %s | offset: %lld", path, offset);
+  D1("READDIR %s | offset: " OFF_FMT, path, offset);
   struct c4gh_readdir_handle h;
   //h.path = path,
   h.buf = buf;
   h.filler = filler;
+#ifdef __APPLE__
   return c4gh.next_oper->readdir(path, &h, c4gh_filler, offset, fi);
+#else
+  return c4gh.next_oper->readdir(path, &h, c4gh_filler, offset, fi, flags);
+#endif
 }
 
 static int c4gh_statfs(const char *path, struct statvfs *buf)
@@ -777,9 +843,11 @@ c4gh_wrap(struct fuse_operations *oper)
 
   c4gh_oper.statfs     = c4gh_statfs;
 
+#ifdef __APPLE__
 #if FUSE_VERSION >= 29
   c4gh_oper.flag_nullpath_ok = 0;
   c4gh_oper.flag_nopath = 0;
+#endif
 #endif
 
   return &c4gh_oper;

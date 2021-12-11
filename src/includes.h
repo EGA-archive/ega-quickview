@@ -2,6 +2,10 @@
 
 #define _GNU_SOURCE /* avoid implicit declaration of *pt* functions */
 
+#ifndef FUSE_USE_VERSION
+#define FUSE_USE_VERSION 34
+#endif
+
 #define PACKAGE_VERSION "1.0"
 
 #ifdef HAVE_CONFIG_H
@@ -59,7 +63,13 @@
 
 #include <sodium.h>
 
-#include <crypt4gh/key.h>
+#ifdef __APPLE__
+#define OFF_FMT "%lld"
+#define INO_FMT "%llu"
+#else
+#define OFF_FMT "%lu"
+#define INO_FMT "%lu"
+#endif
 
 #ifndef _PATH_TTY
 # define _PATH_TTY "/dev/tty"
@@ -187,6 +197,7 @@ extern struct ega_config config;
 #define ERROR_FUNC(kw, fmt, ...) fprintf(stderr, "\x1b[31m" kw " Error:\x1b[0m " fmt "\n", ##__VA_ARGS__)
 
 
+#include "crypt4gh/key.h"
 #include "sshfs/cache.h"
 #include "sshfs/sshfs.h"
 #include "c4ghfs.h"

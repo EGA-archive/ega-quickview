@@ -241,9 +241,11 @@ choke me
 # First of all, we need libfuse3, libsodium, glib2.0 and pthreads
 fuse_lib="fuse3"
 fuse_link="https://github.com/libfuse/libfuse"
+EGAQV_MAIN=main
 if test "$is_apple" = "yes"; then
    fuse_lib="fuse"
    fuse_link="https://github.com/osxfuse/fuse"
+   EGAQV_MAIN=main_mac
    CPPFLAGS="$CPPFLAGS -D_REENTRANT -DFUSE_USE_VERSION=26"
 fi
 
@@ -954,8 +956,7 @@ AC_SUBST([KEYS_DEPEND], [$(cat $srcdir/keys/.depend)])
 AC_SUBST([DEPEND], [$(cat $srcdir/src/.depend)])
 
 AC_SUBST([DEBUG], [$DEBUG])
-
-
+AC_SUBST([EGAQV_MAIN], [$EGAQV_MAIN])
 
 AC_OUTPUT
 
@@ -970,3 +971,4 @@ AC_OUTPUT
    echo "                LIBS: ${LIBS}"
    echo ""
 #fi
+

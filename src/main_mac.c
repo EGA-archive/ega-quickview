@@ -34,7 +34,6 @@ static void usage(struct fuse_args *args)
 "\n"
 "Fuse options:",
 args->argv[0]);
-    fuse_lib_help(args);
     sshfs_print_options();
     cache_print_options();
     c4ghfs_print_options();
@@ -106,19 +105,7 @@ ega_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 	    return 0;
 	  }
 	  else if (!config.mountpoint) {
-	    int fd, len;
-	    if (sscanf(arg, "/dev/fd/%u%n", &fd, &len) == 1 &&
-		len == strlen(arg)) {
-	      /*
-	       * Allow /dev/fd/N unchanged; it can be
-	       * use for pre-mounting a generic fuse
-	       * mountpoint to later be completely
-	       * unprivileged with libfuse >= 3.3.0.
-	       */
-	      config.mountpoint = strdup(arg);
-	    } else {
-	      config.mountpoint = realpath(arg, NULL);
-	    }
+	    config.mountpoint = realpath(arg, NULL);
 	    
 	    if (!config.mountpoint) {
 	      fprintf(stderr, "ega-qv: bad mount point `%s': %s\n",
@@ -139,29 +126,24 @@ ega_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 }
 
 
-#ifdef __APPLE__
-   static char program_path[PATH_MAX] = { 0 };
-#endif /* __APPLE__ */
+static char program_path[PATH_MAX] = { 0 };
 
-#ifdef __APPLE__
 int main(int argc, char *argv[], __unused char *envp[], char **exec_path)
-#else
-int main(int argc, char *argv[])
-#endif
 {
-  int res = 0;
+  int res;
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   struct fuse *fuse;
-  struct fuse_session *se;
+  struct fuse_chan *ch;
   struct fuse_operations *operations;
- 
-  memset(&config, 0, sizeof(struct ega_config));
 
-#ifdef __APPLE__
+  int libver = fuse_version();
+  assert(libver >= 27);
+
   if (!realpath(*exec_path, program_path)) {
     memset(program_path, 0, PATH_MAX);
   }
-#endif /* __APPLE__ */
+
+  memset(&config, 0, sizeof(struct ega_config));
 
   config.progname = argv[0];
   config.show_help = 0;
@@ -173,6 +155,8 @@ int main(int argc, char *argv[])
   config.uid = getuid();
   config.gid = getgid();
   config.mounted_at = time(NULL);
+  config.mnt_mode = S_IFDIR | 0755;
+
 
   /* General options */
   if (fuse_opt_parse(&args, &config, ega_opts, ega_opt_proc) == -1)
@@ -180,8 +164,7 @@ int main(int argc, char *argv[])
 
   if (config.show_version) {
     printf("EGAQV version %s\n", PACKAGE_VERSION);
-    printf("FUSE library version %s\n", fuse_pkgversion());
-    fuse_lowlevel_version();
+    printf("FUSE library version %d\n", fuse_version());
     exit(0);
   }
   if (config.show_help) {
@@ -234,6 +217,8 @@ int main(int argc, char *argv[])
     config.foreground = 1;
 
   fuse_opt_insert_arg(&args, 1, "-osubtype=egafs,fsname=EGAQV");
+  if (fuse_is_lib_option("ac_attr_timeout="))
+    fuse_opt_insert_arg(&args, 1, "-oauto_cache,ac_attr_timeout=0");
 
   D1("EGAQV version %s", PACKAGE_VERSION);
 
@@ -247,7 +232,7 @@ int main(int argc, char *argv[])
   if(base_path_len > 0){
     char* last = config.base_path + base_path_len - 1;
     if(*last == '/')
-      *last == '\0';
+      *last = '\0';
   }
 
   /* Stack up the file systems */
@@ -259,34 +244,23 @@ int main(int argc, char *argv[])
 
   config.op = operations;
 
-  /* Create a fuse session */
-  D1("Starting the FUSE session");
-  fuse = fuse_new(&args, operations, sizeof(struct fuse_operations), NULL /* &config */);
+  D2("fuse_mount: %s\n", config.mountpoint);
+  ch = fuse_mount(config.mountpoint, &args);
+  if (!ch){
+    res = 1;
+    goto bailout;
+  }
+
+  res = fcntl(fuse_chan_fd(ch), F_SETFD, FD_CLOEXEC);
+  if (res == -1)
+    perror("WARNING: failed to set FD_CLOEXEC on fuse device");
+
+  D2("fuse_new\n");
+  fuse = fuse_new(ch, &args, operations, sizeof(struct fuse_operations), NULL);
   if(fuse == NULL){
     res = 2;
-    goto bailout;
+    goto bailout_unmount;
   }
-
-  se = fuse_get_session(fuse);
-  if (se == NULL){
-    res = 3;
-    goto bailout;
-  }
-
-  D3("Setting up signal handlers");
-  if (fuse_set_signal_handlers(se) != 0) {
-    res = 4;
-    goto bailout_destroy;
-  }
-
-  D3("Mounting %s", config.mountpoint);
-  if (fuse_session_mount(se, config.mountpoint) != 0) {
-    res = 5;
-    goto bailout_destroy;
-  }
-
-  if (fcntl(fuse_session_fd(se), F_SETFD, FD_CLOEXEC) == -1)
-    perror("WARNING: failed to set FD_CLOEXEC on fuse device");
 
   D3("SSH connect");
   if (ssh_connect() == -1) { /* $PATH =/= mountpoint: no deadlock */
@@ -299,43 +273,46 @@ int main(int argc, char *argv[])
     res = 6;
     goto bailout_unmount;
   }
+    
+  D3("Setting up signal handlers");
+  if (fuse_set_signal_handlers(fuse_get_session(fuse)) != 0) {
+    res = 4;
+    goto bailout_unmount;
+  }
+
 
   D1("Mode: %s-threaded\n", (config.singlethread)?"single":"multi");
 
   if (config.singlethread)
     res = fuse_loop(fuse);
-  else {
-    struct fuse_loop_config cf = {
-      .clone_fd = config.clone_fd,
-      .max_idle_threads = config.max_idle_threads,
-    };
-    res = fuse_loop_mt(fuse, &cf);
-  }
+  else
+    res = fuse_loop_mt(fuse);
 
   if (res != 0)
     res = 8;
 
-
- bailout_signal:
+bailout_signal:
   D3("Removing signal handlers");
-  fuse_remove_signal_handlers(se);
+  fuse_remove_signal_handlers(fuse_get_session(fuse));
 
- bailout_unmount:
+bailout_unmount:
   D3("Unmounting");
-  fuse_unmount(fuse);
+  fuse_unmount(config.mountpoint, ch);
 
- bailout_destroy:
+bailout_destroy:
   D3("Destroying");
   fuse_destroy(fuse);
 
- bailout:
+bailout:
   D1("Exiting with status %d", res);
 
   fuse_opt_free_args(&args);
+
+  if(config.debug)
+    sshfs_print_stats();
 
   if(config.host) free(config.host);
   if(config.mountpoint) free(config.mountpoint);
 
   return res;
 }
-
