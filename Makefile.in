@@ -44,7 +44,7 @@ clean:
 veryclean: clean
 	-make -C keys veryclean
 
-distclean: clean
+distclean: veryclean
 	-rm -f Makefile src/config.h* config.status configure config.log
 	-rm -rf autom4te.cache aclocal.m4 src/.depend.old
 
