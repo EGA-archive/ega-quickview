@@ -477,19 +477,26 @@ struct fuse_operations *cache_wrap(struct fuse_operations *oper)
 
 void cache_print_options(void)
 {
+#define DEFAULT_CACHE_TIMEOUT_SECS            300 //20
+#define DEFAULT_MAX_CACHE_SIZE                10000
+#define DEFAULT_CACHE_CLEAN_INTERVAL_SECS     60
+#define DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS 5
+
 	printf("\n"
 "Cache Options:\n"
-"    -o dcache_max_size=N   sets the maximum size of the directory cache (default: 10000)\n"
-"    -o dcache_timeout=N    sets timeout for directory cache in seconds (default: 20)\n"
+"    -o dcache_max_size=N   sets the maximum size of the directory cache (default: %u)\n"
+"    -o dcache_timeout=N    sets timeout for directory cache in seconds (default: %u)\n"
 "    -o dcache_{stat,dir}_timeout=N\n"
 "                           sets separate timeout for {attributes, names}\n"
 "    -o dcache_clean_interval=N\n"
-"                           sets the interval for automatic cleaning of the\n"
-"                           cache (default: 60)\n"
+"                           sets the interval for automatic cleaning of the cache (default: %u)\n"
 "    -o dcache_min_clean_interval=N\n"
-"                           sets the interval for forced cleaning of the\n"
-"                           cache if full (default: 5)\n"
-);
+"                           sets the interval for forced cleaning of the cache if full (default: %u)\n",
+	       DEFAULT_MAX_CACHE_SIZE,
+	       DEFAULT_CACHE_TIMEOUT_SECS,
+	       DEFAULT_CACHE_CLEAN_INTERVAL_SECS,
+	       DEFAULT_MIN_CACHE_CLEAN_INTERVAL_SECS
+	       );
 }
 
 #define CACHE_OPT(t, p, v) { t, offsetof(struct cache, p), v }

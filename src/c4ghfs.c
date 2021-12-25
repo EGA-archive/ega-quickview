@@ -971,7 +971,7 @@ void c4ghfs_print_options(void)
 "Crypt4GH Options:\n"
 "    -o c4gh_debug=N        debug level N\n"
 "    -o seckey=<path>       path to the Crypt4GH secret key\n"
-"    -o passphrase_from_env=<ENVVAR>"
+"    -o passphrase_from_env=<ENVVAR>\n"
 "                           read passphrase from environment variable <ENVVAR>\n"
 "    -o header_size=<SIZE>  hint for the header sizes\n"
 );
