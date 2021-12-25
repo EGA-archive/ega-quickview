@@ -828,6 +828,7 @@ c4gh_wrap(struct fuse_operations *oper)
   c4gh.next_oper = oper;
 
   static struct fuse_operations c4gh_oper;
+  memset(&c4gh_oper, 0, sizeof(struct fuse_operations));
 
   c4gh_oper.init       = c4gh_init;
   c4gh_oper.destroy    = c4gh_destroy;
@@ -841,7 +842,7 @@ c4gh_wrap(struct fuse_operations *oper)
   c4gh_oper.read       = c4gh_read;
   c4gh_oper.release    = c4gh_release;
 
-  c4gh_oper.statfs     = c4gh_statfs;
+  //c4gh_oper.statfs     = oper->statfs ? c4gh_statfs : NULL;
 
 #ifdef __APPLE__
 #if FUSE_VERSION >= 29

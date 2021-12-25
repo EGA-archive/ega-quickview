@@ -177,8 +177,10 @@ static int cache_get_statvfs(const char *path, struct statvfs *stbuf)
     if (cache.statvfs_valid - now >= 0) {
       *stbuf = cache.statvfs;
       err = 0;
-    } else
+    } else {
       D1("statvfs expired for %s", path);
+      cache.statvfs_set = 0;
+    }
   }
   pthread_mutex_unlock(&cache.lock);
   return err;
@@ -456,7 +458,7 @@ struct fuse_operations *cache_wrap(struct fuse_operations *oper)
   cache_oper.readdir  = oper->readdir ? cache_readdir : NULL;
   cache_oper.releasedir = cache_releasedir;
 
-  cache_oper.statfs   = cache_statfs;
+  cache_oper.statfs   = oper->statfs ? cache_statfs : NULL;
 
   /* passthrough */
   cache_oper.open     = oper->open;
