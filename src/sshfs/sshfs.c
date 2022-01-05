@@ -416,10 +416,9 @@ static inline void buf_add_path(struct buffer *buf, const char *path)
 {
         D3("buf_add_path: %s", path);
 
-        /* Trimmed the base_path last slash already */
 	char *realpath = g_strdup_printf("%s/%s",
-					 (config.base_path)?config.base_path:"",
-					 (path)?path:".");
+					 (config.base_path)?config.base_path:"",   /* trailing / already trimmed */
+					 (path)?((*path=='/')?(path+1):path):"."); /* trim the leading / */
 	buf_add_string(buf, realpath);
 	g_free(realpath);
 }
