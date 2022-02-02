@@ -3,6 +3,7 @@
 #define ROOT_ATTRS_TIMEOUT   30.0 /* half a minute */
 #define DIR_ATTRS_TIMEOUT    24 * 3600.0 /* one day */
 #define DEFAULT_BASE_PATH    "/outbox"
+#define DEFAULT_MAX_THREADS  10
 
 
 /* Debug color: Yellow */
@@ -65,7 +66,7 @@ static struct fuse_opt ega_opts[] = {
 	/* if multithreaded */
 	EGA_OPT("-s"              , singlethread    , 1),
 	EGA_OPT("clone_fd"        , clone_fd        , 1),
-	EGA_OPT("max_idle_threads", max_idle_threads, 10),
+	EGA_OPT("max_idle_threads=%u", max_idle_threads, 0),
 
 
 	/* Ignore these options.
@@ -155,6 +156,7 @@ int main(int argc, char *argv[], __unused char *envp[], char **exec_path)
   config.gid = getgid();
   config.mounted_at = time(NULL);
   config.mnt_mode = S_IFDIR | 0755;
+  config.max_idle_threads = DEFAULT_MAX_THREADS;
 
 
   /* General options */
