@@ -306,6 +306,8 @@ int main(int argc, char *argv[])
   if (config.singlethread)
     res = fuse_loop(fuse);
   else {
+    if(config.max_idle_threads < 0)
+      config.max_idle_threads = DEFAULT_MAX_THREADS; /* reset */
     struct fuse_loop_config cf = {
       .clone_fd = config.clone_fd,
       .max_idle_threads = config.max_idle_threads,
