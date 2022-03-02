@@ -9,8 +9,6 @@ extern struct fuse_operations sshfs_oper;
 void sshfs_print_options(void);
 int sshfs_parse_options(struct fuse_args *args);
 void sshfs_print_stats(void);
-size_t sshfs_decrypted_size(const char *path);
-
 
 struct conn {
 	pthread_mutex_t lock_write;
@@ -61,6 +59,6 @@ struct sshfs_file {
 	struct conn *conn;
 	int connver;
 
-        /* For the encrypted files */
-        off_t remote_size;
+        /* For the encrypted/decrypted files */
+        size_t filesize;
 };

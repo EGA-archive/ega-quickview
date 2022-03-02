@@ -428,9 +428,6 @@ struct fuse_operations *cache_wrap(struct fuse_operations *oper)
   cache_oper.read     = oper->read;
   cache_oper.release  = oper->release;
 
-  cache_oper.listxattr  = oper->listxattr;
-  cache_oper.getxattr   = oper->getxattr;
-
   return &cache_oper;
 }
 

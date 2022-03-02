@@ -41,7 +41,6 @@ struct c4gh_file {
   /* header */
   uint8_t *header;
   unsigned int header_size;
-  size_t encrypted_filesize;
   size_t filesize;
 
   /* parsed header */
@@ -181,12 +180,6 @@ c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
     err = c4gh.next_oper->getattr(c4gh_path, stbuf, fi2);
   }
 
-  /* adjust the size if it's a file */
-  if(!err && S_ISREG(stbuf->st_mode)){ 
-    pthread_mutex_lock(&c4gh.lock);
-    stbuf->st_size = sshfs_decrypted_size(c4gh_path);
-  }
-
   stbuf->st_uid = getuid();
   stbuf->st_gid = getgid();
 
@@ -219,7 +212,7 @@ c4gh_open(const char *path, struct fuse_file_info *fi)
   }
 
   struct sshfs_file *sshfh = (struct sshfs_file*)cfi->fi.fh;
-  cfi->encrypted_filesize = sshfh->remote_size;
+  cfi->filesize = sshfh->filesize;
 
 
   if(!config.singlethread)
@@ -371,20 +364,12 @@ static inline int
 c4gh_open_header(const char* path, struct c4gh_file *cfi)
 {
   D2("Open header of %s", path);
-  if(c4gh_fetch_header(path, &cfi->header, &cfi->header_size, &cfi->fi) ||
-     c4gh_header_parse(cfi->header, cfi->header_size,
-		       c4gh.seckey, c4gh.pubkey,
-		       &cfi->session_keys, &cfi->nkeys,
-		       &cfi->edit_list, &cfi->edit_list_len)
-     )
-    return 1;
-
-  D3("Encrypted filesize: %zu", cfi->encrypted_filesize);
-  cfi->filesize = sshfs_decrypted_size(path);
-  D3("Decrypted filesize: %zu", cfi->filesize);
-
-  D3("Number of keys: %d", cfi->nkeys);
-  return 0;
+  return (c4gh_fetch_header(path, &cfi->header, &cfi->header_size, &cfi->fi) ||
+	  c4gh_header_parse(cfi->header, cfi->header_size,
+			    c4gh.seckey, c4gh.pubkey,
+			    &cfi->session_keys, &cfi->nkeys,
+			    &cfi->edit_list, &cfi->edit_list_len)
+	  );
 }
 
 
@@ -501,6 +486,8 @@ c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
     E("Opening header failed");
     return -EPERM;
   }
+
+  D3("Number of keys: %d", cfi->nkeys);
 
   /* Check if the offset and requested size are within the file boundaries */
   /* filesize is calculated _after_ opening the header */
@@ -654,23 +641,17 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
   }
 
   D2("FILLER | checking file type | %p", stbuf);
-  struct stat s = *stbuf; /* copy */
 
-  s.st_uid = getuid();
-  s.st_gid = getgid();
-
-  if(!S_ISREG(s.st_mode)){ /* not a reg file */
+  if(!S_ISREG(stbuf->st_mode)){ /* not a reg file */
     D2("FILLER | not a regular file");
-    return h->filler(h->buf, name, &s, off, flags);
+    return h->filler(h->buf, name, stbuf, off, flags);
   }
 	
   /* It's a file: adjust name and size */
   D2("FILLER | regular file: %s | encrypted size: " OFF_FMT, name, stbuf->st_size);
   char *dname = remove_extension(name);
   if(dname){
-    s.st_size = c4gh_size(stbuf->st_size); 
-    D2("FILLER with name: %s | decrypted size: " OFF_FMT, dname, s.st_size);
-    err = h->filler(h->buf, dname, &s, off, flags);
+    err = h->filler(h->buf, dname, stbuf, off, flags);
     free(dname);
   }
   return err;
@@ -698,29 +679,6 @@ static int c4gh_statfs(const char *path, struct statvfs *buf)
 }
 
 
-static int
-c4gh_listxattr(const char *path, char *list, size_t size)
-{
-  size_t plen = strlen(path);
-  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
-  memcpy(c4gh_path, path, plen);
-  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
-  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
-  return c4gh.next_oper->listxattr(c4gh_path, list, size);
-}
-
-static int
-c4gh_getxattr(const char *path, const char *name, char* value, size_t size)
-{
-  size_t plen = strlen(path);
-  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
-  memcpy(c4gh_path, path, plen);
-  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
-  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
-  return c4gh.next_oper->getxattr(c4gh_path, name, value, size);
-}
-
-
 struct fuse_operations *
 c4gh_wrap(struct fuse_operations *oper)
 {
@@ -742,9 +700,6 @@ c4gh_wrap(struct fuse_operations *oper)
   c4gh_oper.release    = c4gh_release;
 
   //c4gh_oper.statfs     = oper->statfs ? c4gh_statfs : NULL;
-
-  c4gh_oper.listxattr  = oper->listxattr ? c4gh_listxattr : NULL;
-  c4gh_oper.getxattr  = oper->getxattr ? c4gh_getxattr : NULL;
 
   return &c4gh_oper;
 }
