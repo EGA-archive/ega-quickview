@@ -28,14 +28,23 @@ AC_C_INLINE
 # AC_C_BIGENDIAN
 
 # First of all, we need libsodium, for ssh-ed25519 keys
-old_CFLAGS="${CFLAGS}"
-old_LDFLAGS="$LDFLAGS"
-CFLAGS="${CFLAGS} $(pkg-config --cflags libsodium)"
-LDFLAGS="$LDFLAGS $(pkg-config --libs libsodium)"
-AC_SEARCH_LIBS([sodium_malloc], [sodium], [], [AC_MSG_ERROR("libsodium is required. Install it from https://libsodium.org/.")])
-CFLAGS="${CFLAGS} $(pkg-config --cflags libsodium)"
-LDFLAGS="$LDFLAGS $(pkg-config --libs libsodium)"
+dnl old_CFLAGS="${CFLAGS}"
+dnl old_LDFLAGS="$LDFLAGS"
+CFLAGS="${CFLAGS} $(pkg-config --cflags libsodium glib-2.0 fuse3)"
+LDFLAGS="$LDFLAGS $(pkg-config --libs libsodium glib-2.0 fuse3)"
+AC_SEARCH_LIBS([sodium_malloc], [sodium], [],
+				[AC_MSG_ERROR("libsodium is required. Install it from https://libsodium.org/.")])
+AC_SEARCH_LIBS([g_hash_table_new_full], [glib-2.0], [],
+				[AC_MSG_ERROR("glib2.0 is required. Install it from https://docs.gtk.org/glib/.")])
+AC_SEARCH_LIBS([fuse_new], [fuse3], [],
+				[AC_MSG_ERROR("fuse3 is required. Install it from https://github.com/libfuse/libfuse.")])
 
+dnl CFLAGS="${old_CFLAGS} $(pkg-config --cflags libsodium glib-2.0 fuse3)"
+dnl LDFLAGS="${old_LDFLAGS} $(pkg-config --libs libsodium glib-2.0 fuse3)"
+
+#######################################################
+# GCC
+#######################################################
 
 if test "$GCC" = "yes"; then
 	AC_MSG_CHECKING([gcc version])
@@ -223,36 +232,6 @@ AC_RUN_IFELSE(
 		AC_MSG_WARN([cross compiling: not checking])
 	]
 )
-
-#######################################################
-# FUSE 
-#######################################################
-
-is_apple="no"
-AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]], [[
-#ifdef __APPLE__ or __MACH__
-int ok;
-#else
-choke me
-#endif
-]])], [ is_apple="yes" ], [])
-
-
-# First of all, we need libfuse3, libsodium, glib2.0 and pthreads
-fuse_lib="fuse3"
-fuse_link="https://github.com/libfuse/libfuse"
-EGAQV_MAIN=main
-if test "$is_apple" = "yes"; then
-   fuse_lib="fuse"
-   fuse_link="https://github.com/osxfuse/fuse"
-   EGAQV_MAIN=main_mac
-   CPPFLAGS="$CPPFLAGS -D_REENTRANT -DFUSE_USE_VERSION=26"
-fi
-
-#export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
-PKG_CHECK_MODULES([EGAQV], [$fuse_lib >= 2.3 glib-2.0])
-CFLAGS="${CFLAGS} $(${PKG_CONFIG} --cflags glib-2.0 $fuse_lib)"
-LDFLAGS="$LDFLAGS $(${PKG_CONFIG} --libs glib-2.0 $fuse_lib)"
 
 #######################################################
 # Miscellaneous checks
@@ -956,7 +935,6 @@ AC_SUBST([KEYS_DEPEND], [$(cat $srcdir/keys/.depend)])
 AC_SUBST([DEPEND], [$(cat $srcdir/src/.depend)])
 
 AC_SUBST([DEBUG], [$DEBUG])
-AC_SUBST([EGAQV_MAIN], [$EGAQV_MAIN])
 
 AC_OUTPUT
 

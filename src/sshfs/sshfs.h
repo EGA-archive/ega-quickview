@@ -9,6 +9,7 @@ extern struct fuse_operations sshfs_oper;
 void sshfs_print_options(void);
 int sshfs_parse_options(struct fuse_args *args);
 void sshfs_print_stats(void);
+size_t sshfs_decrypted_size(const char *path);
 
 
 struct conn {

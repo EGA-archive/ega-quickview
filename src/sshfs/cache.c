@@ -240,22 +240,14 @@ static int cache_get_attr(const char *path, struct stat *stbuf)
 	return err;
 }
 
-#ifdef __APPLE__
-static void *cache_init(struct fuse_conn_info *conn)
-#else
 static void *cache_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
-#endif
 {
 	void *res;
 
-#ifdef __APPLE__
-	res = cache.next_oper->init(conn);
-#else
 	res = cache.next_oper->init(conn, cfg);
 
 	// Cache requires a path for each request
 	cfg->nullpath_ok = 0;
-#endif
 
 	pthread_mutex_init(&cache.lock, NULL);
 	cache.table = g_hash_table_new_full(g_str_hash, g_str_equal,
@@ -279,20 +271,12 @@ static void cache_destroy(void *userdata)
 }
 
 
-#ifdef __APPLE__
-static int cache_getattr(const char *path, struct stat *stbuf)
-#else
 static int cache_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
-#endif
 {
         D1("GETATTR %s", path);
 	int err = cache_get_attr(path, stbuf);
 	if (err) {
-#ifdef __APPLE__
-		err = cache.next_oper->getattr(path, stbuf);
-#else
 		err = cache.next_oper->getattr(path, stbuf, fi);
-#endif
 		D2("from underlying fs: %s", strerror((err>0)?err:-err));
 		if (!err)
 			cache_add_attr(path, stbuf);
@@ -345,22 +329,14 @@ static int cache_releasedir(const char *path, struct fuse_file_info *fi)
 	return err;
 }
 
-#ifdef __APPLE__
-static int cache_dirfill (void *buf, const char *name, const struct stat *stbuf, off_t off)
-#else
 static int cache_dirfill (void *buf, const char *name, const struct stat *stbuf, off_t off, enum fuse_fill_dir_flags flags)
-#endif
 {
   D2("FILLER %s", name);
 	int err;
 	struct readdir_handle *ch;
 
 	ch = (struct readdir_handle*) buf;
-#ifdef __APPLE__
-	err = ch->filler(ch->buf, name, stbuf, off);
-#else
 	err = ch->filler(ch->buf, name, stbuf, off, flags);
-#endif
 	if (!err) {
 		g_ptr_array_add(ch->dir, g_strdup(name));
 		if (stbuf->st_mode & S_IFMT) {
@@ -375,13 +351,8 @@ static int cache_dirfill (void *buf, const char *name, const struct stat *stbuf,
 	return err;
 }
 
-#ifdef __APPLE__
-static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-			 off_t offset, struct fuse_file_info *fi)
-#else
 static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			 off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
-#endif
 {
         D1("READDIR %s", path);
 	struct readdir_handle ch;
@@ -399,11 +370,7 @@ static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		if (node->dir_valid - now >= 0) {
 			for(dir = node->dir; *dir != NULL; dir++)
 				// FIXME: What about st_mode?
-#ifdef __APPLE__
-				filler(buf, *dir, NULL, 0);
-#else
 				filler(buf, *dir, NULL, 0, 0);
-#endif
 			pthread_mutex_unlock(&cache.lock);
 			return 0;
 		}
@@ -427,11 +394,7 @@ static int cache_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	ch.buf = buf;
 	ch.filler = filler;
 	ch.dir = g_ptr_array_new();
-#ifdef __APPLE__
-	err = cache.next_oper->readdir(path, &ch, cache_dirfill, offset, fi);
-#else
 	err = cache.next_oper->readdir(path, &ch, cache_dirfill, offset, fi, flags);
-#endif
 	g_ptr_array_add(ch.dir, NULL);
 	dir = (char **) ch.dir->pdata;
 	if (!err) {
@@ -465,13 +428,9 @@ struct fuse_operations *cache_wrap(struct fuse_operations *oper)
   cache_oper.read     = oper->read;
   cache_oper.release  = oper->release;
 
-#ifdef __APPLE__
-#if FUSE_VERSION >= 29
-  cache_oper.flag_nullpath_ok = 0;
-  cache_oper.flag_nopath = 0;
-#endif
-#endif
-  
+  cache_oper.listxattr  = oper->listxattr;
+  cache_oper.getxattr   = oper->getxattr;
+
   return &cache_oper;
 }
 

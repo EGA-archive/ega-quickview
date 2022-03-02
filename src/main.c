@@ -139,15 +139,7 @@ ega_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 }
 
 
-#ifdef __APPLE__
-   static char program_path[PATH_MAX] = { 0 };
-#endif /* __APPLE__ */
-
-#ifdef __APPLE__
-int main(int argc, char *argv[], __unused char *envp[], char **exec_path)
-#else
 int main(int argc, char *argv[])
-#endif
 {
   int res = 0;
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
@@ -156,12 +148,6 @@ int main(int argc, char *argv[])
   struct fuse_operations *operations;
  
   memset(&config, 0, sizeof(struct ega_config));
-
-#ifdef __APPLE__
-  if (!realpath(*exec_path, program_path)) {
-    memset(program_path, 0, PATH_MAX);
-  }
-#endif /* __APPLE__ */
 
   config.progname = argv[0];
   config.show_help = 0;

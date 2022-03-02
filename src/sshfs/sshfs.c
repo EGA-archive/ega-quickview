@@ -153,6 +153,9 @@ struct sshfs {
 	int max_conns;
 	struct conn *conns;
 
+	GHashTable *extended_attrs;
+	pthread_mutex_t extended_attrs_lock;
+
 	int connvers;
 	int server_version;
 
@@ -491,7 +494,7 @@ static inline int buf_get_string(struct buffer *buf, char **str)
 	return 0;
 }
 
-static int buf_get_attrs(struct buffer *buf, struct stat *stbuf, int *flagsp)
+static int buf_get_attrs(struct buffer *buf, struct stat *stbuf, int *flagsp, uint64_t *decrypted_filesize)
 {
 	uint32_t flags;
 	uint64_t size = 0;
@@ -526,14 +529,21 @@ static int buf_get_attrs(struct buffer *buf, struct stat *stbuf, int *flagsp)
 		unsigned i;
 		if (buf_get_uint32(buf, &extcount) == -1)
 			return -EIO;
+		char *key = NULL, *value = NULL;
 		for (i = 0; i < extcount; i++) {
-			struct buffer tmp;
-			if (buf_get_data(buf, &tmp) == -1)
-				return -EIO;
-			buf_free(&tmp);
-			if (buf_get_data(buf, &tmp) == -1)
-			  return -EIO;
-			buf_free(&tmp);
+		      if (buf_get_string(buf, &key) == -1)
+			return -EIO;
+		      if (buf_get_string(buf, &value) == -1)
+			return -EIO;
+
+		      if(strcmp(key, "decrypted_filesize") == 0){
+			D1("value: %s", value);
+			if(decrypted_filesize)
+			  *decrypted_filesize = strtoull(value, NULL, 10);
+		      }
+
+		      if(key) free(key);
+		      if(value) free(value);
 		}
 	}
 
@@ -610,20 +620,24 @@ static int buf_get_entries(struct buffer *buf, void *dbuf,
 		char *name;
 		char *longname;
 		struct stat stbuf;
+		size_t decrypted_filesize = 0;
 		if (buf_get_string(buf, &name) == -1)
 			return -EIO;
 		if (buf_get_string(buf, &longname) != -1) {
 			free(longname);
-			err = buf_get_attrs(buf, &stbuf, NULL);
+			err = buf_get_attrs(buf, &stbuf, NULL, &decrypted_filesize);
 			if (!err) {
-#ifdef __APPLE__
-				filler(dbuf, name, &stbuf, 0);
-#else
 				filler(dbuf, name, &stbuf, 0, 0);
-#endif
 			}
 		}
-		free(name);
+		if(err || !config.c4gh_decrypt)
+		  free(name);
+		else { /* don't free(name) and use it in the hashtable */
+		    pthread_mutex_lock(&sshfs.extended_attrs_lock);
+		    g_hash_table_replace(sshfs.extended_attrs, name, GUINT_TO_POINTER(decrypted_filesize));
+		    pthread_mutex_unlock(&sshfs.extended_attrs_lock);
+		}
+
 		if (err)
 			return err;
 	}
@@ -1258,7 +1272,7 @@ static int sftp_check_root(struct conn *conn, const char *base_path)
 		goto out;
 	}
 
-	int err2 = buf_get_attrs(&buf, &stbuf, &flags);
+	int err2 = buf_get_attrs(&buf, &stbuf, &flags, NULL); /* ignore decrypted filesize */
 	if (err2) {
 		err = err2;
 		goto out;
@@ -1629,14 +1643,9 @@ static int sshfs_opendir(const char *path, struct fuse_file_info *fi)
 	return err;
 }
 
-#ifdef __APPLE__
-static int sshfs_readdir(const char *path, void *dbuf, fuse_fill_dir_t filler,
-			 off_t offset, struct fuse_file_info *fi)
-#else
 static int sshfs_readdir(const char *path, void *dbuf, fuse_fill_dir_t filler,
 			 off_t offset, struct fuse_file_info *fi,
 			 enum fuse_readdir_flags flags)
-#endif
 {
         D1("READDIR %s | offset " OFF_FMT, path, offset);
 	(void) path;
@@ -1701,6 +1710,8 @@ static int sshfs_open(const char *path, struct fuse_file_info *fi)
 	uint32_t pflags = 0;
 	struct iovec iov;
 	uint8_t type;
+	size_t decrypted_filesize = 0;
+
 
 	if (fi->flags & O_CREAT ||
 	    fi->flags & O_EXCL  ||
@@ -1753,8 +1764,15 @@ static int sshfs_open(const char *path, struct fuse_file_info *fi)
 	type = SSH_FXP_LSTAT;
 	err2 = sftp_request(sf->conn, type, &buf, SSH_FXP_ATTRS, &outbuf);
 	if (!err2) {
-		err2 = buf_get_attrs(&outbuf, &stbuf, NULL);
+		err2 = buf_get_attrs(&outbuf, &stbuf, NULL, &decrypted_filesize);
 		buf_free(&outbuf);
+		
+		if(!err2 && config.c4gh_decrypt){ /* save the decrypted filesize */
+		  pthread_mutex_lock(&sshfs.extended_attrs_lock);
+		  /* todo: check g_strdup output for memory allocation error */
+		  g_hash_table_replace(sshfs.extended_attrs, g_strdup(path), GUINT_TO_POINTER(decrypted_filesize));
+		  pthread_mutex_unlock(&sshfs.extended_attrs_lock);
+		}
 	}
 	err = sftp_request_wait(open_req, SSH_FXP_OPEN, SSH_FXP_HANDLE,
 				&sf->handle);
@@ -2100,44 +2118,41 @@ static int sshfs_statfs(const char *path, struct statvfs *buf)
 	return 0;
 }
 
-#ifdef __APPLE__
-static int sshfs_getattr(const char *path, struct stat *stbuf)
-#else
 static int sshfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
-#endif
 {
         D1("GETATTR %s", path);
 	int err;
 	struct buffer buf;
 	struct buffer outbuf;
 	struct sshfs_file *sf = NULL;
+	size_t decrypted_filesize = 0;
 
-#ifndef __APPLE__
 	if (fi != NULL && (sf = get_sshfs_file(fi)) != NULL) {
 	  if (!sshfs_file_is_conn(sf))
 	    return -EIO;
 	}
-#endif
 
 	buf_init(&buf, 0);
-#ifndef __APPLE__
 	if(sf == NULL) {
-#endif
 		buf_add_path(&buf, path);
 		err = sftp_request(get_conn(sf, path), SSH_FXP_LSTAT, &buf, SSH_FXP_ATTRS, &outbuf);
-#ifndef __APPLE__
 	}
 	else {
 		buf_add_buf(&buf, &sf->handle);
 		err = sftp_request(sf->conn, SSH_FXP_FSTAT, &buf, SSH_FXP_ATTRS, &outbuf);
 	}
-#endif
 	if (!err) {
-		err = buf_get_attrs(&outbuf, stbuf, NULL);
-#ifdef __APPLE__
+		err = buf_get_attrs(&outbuf, stbuf, NULL, &decrypted_filesize);
 		stbuf->st_blksize = 0;
-#endif
 		buf_free(&outbuf);
+
+		if(!err && config.c4gh_decrypt){ /* save the decrypted filesize */
+		  pthread_mutex_lock(&sshfs.extended_attrs_lock);
+		  /* todo: check g_strdup output for memory allocation error */
+		  g_hash_table_replace(sshfs.extended_attrs, g_strdup(path), GUINT_TO_POINTER(decrypted_filesize));
+		  pthread_mutex_unlock(&sshfs.extended_attrs_lock);
+		}
+
 	}
 	buf_free(&buf);
 	return err;
@@ -2166,6 +2181,15 @@ static int processing_init(void)
 			return -1;
 		}
 	}
+
+	pthread_mutex_init(&sshfs.extended_attrs_lock, NULL);
+	sshfs.extended_attrs = g_hash_table_new_full(g_str_hash, g_str_equal,
+						     NULL, NULL);
+	if (!sshfs.extended_attrs) {
+		fprintf(stderr, "failed to create hash table for extended attributes\n");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -2264,20 +2288,11 @@ int ssh_connect(void)
 	return 0;
 }
 
-#ifdef __APPLE__
-static void *sshfs_init(struct fuse_conn_info *conn)
-#else
 static void *sshfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
-#endif
 {
   D1("INIT");
 
-#ifdef __APPLE__
-	/* Readahead should be done by kernel or sshfs but not both */
-	if (conn->async_read)
-		sshfs.sync_read = 1;
-#else
-  /* Readahead should be done by kernel or sshfs but not both */
+        /* Readahead should be done by kernel or sshfs but not both */
 	if (conn->capable & FUSE_CAP_ASYNC_READ)
 		sshfs.sync_read = 1;
 
@@ -2293,23 +2308,14 @@ static void *sshfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 
 	// SFTP only supports 1-second time resolution
 	conn->time_gran = 1000000000;
-#endif
 
 	if (!sshfs.delay_connect)
 		start_processing_thread(&sshfs.conns[0]);
 
-#ifdef __APPLE__
-#if FUSE_VERSION >= 29
-	// When using multiple connections, release() needs to know the path
-	if (sshfs.max_conns > 1)
-	  sshfs_oper.flag_nullpath_ok = 0;
-#endif
-#endif
-
 	return NULL;
 }
 
-void
+static void
 sshfs_destroy(void *userdata)
 {
   D1("DESTROY");
@@ -2334,11 +2340,63 @@ sshfs_destroy(void *userdata)
   /* clean the ssh args */
   D2("Cleaning the ssh args");
   fuse_opt_free_args(&sshfs.args);
+
+  /* remove the decrypted_filesize cache */
+  g_hash_table_destroy(sshfs.extended_attrs);
+  sshfs.extended_attrs = NULL;
 }
 
+static int
+sshfs_listxattr(const char *path, char *list, size_t size)
+{
+  /* extended attributes for files: only "user.decrypted_filesize" */
+
+  D1("listxattr | path=%s | size=%zu", path, size);
+  int vsize = sizeof("user.decrypted_filesize"); // null-terminated
+
+  if (!size)
+    return vsize;
+
+  if(size < vsize)
+    return -ERANGE;
+
+  memcpy(list, "user.decrypted_filesize", vsize);
+  return vsize;
+}
+
+static int
+sshfs_getxattr(const char *path, const char *name, char* value, size_t size)
+{
+  /* extended attributes for files: only "user.decrypted_filesize" */
+
+  if (strcmp(name, "user.decrypted_filesize"))
+    return -ENODATA;
+
+  if (size == 0)
+    return 32; /* large enough to the the digits of max uint64_t (2^65 - 1) */
+
+  D1("getxattr | path=%s | name: %s | size=%zu", path, name, size);
+
+  gpointer p = g_hash_table_lookup(sshfs.extended_attrs, path);
+  if(!p)
+    return -ENODATA;
+
+  size_t res = (size_t) GPOINTER_TO_UINT(p);
+  return snprintf(value, size, "%zu", res);
+}
+
+size_t
+sshfs_decrypted_size(const char *path)
+{
+  gpointer p = g_hash_table_lookup(sshfs.extended_attrs, path);
+  if(!p)
+    return 0;
+  return (size_t) GPOINTER_TO_UINT(p);
+}
 
 struct fuse_operations sshfs_oper = {
   .init       = sshfs_init,
+  .destroy    = sshfs_destroy,
   .getattr    = sshfs_getattr,
   .opendir    = sshfs_opendir,
   .readdir    = sshfs_readdir,
@@ -2347,14 +2405,8 @@ struct fuse_operations sshfs_oper = {
   .release    = sshfs_release,
   .read       = sshfs_read,
   .statfs     = sshfs_statfs,
-
-#ifdef __APPLE__
-#if FUSE_VERSION >= 29
-  .flag_nullpath_ok = 1,
-  .flag_nopath = 1,
-#endif
-#endif
-
+  .listxattr  = sshfs_listxattr,
+  .getxattr   = sshfs_getxattr,
 };
 
 void sshfs_print_options(void)

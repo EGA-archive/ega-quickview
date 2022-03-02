@@ -11,10 +11,6 @@
 #define DEFAULT_SECKEY       "~/.c4gh/seckey"
 #define MAX_PASSPHRASE       1024
 
-#ifndef DEFAULT_HEADER_SIZE
-#define DEFAULT_HEADER_SIZE  0 //124
-#endif
-
 /* Debug color: Magenta */
 #define D1(format, ...) if(c4gh.debug > 0) DEBUG_FUNC("\x1b[35m", "[C4GH]", format, ##__VA_ARGS__)
 #define D2(format, ...) if(c4gh.debug > 1) DEBUG_FUNC("\x1b[35m", "[C4GH]", "     " format, ##__VA_ARGS__)
@@ -26,8 +22,6 @@ struct c4gh {
 
   struct fuse_operations *next_oper;
   pthread_mutex_t lock;
-
-  unsigned int header_size;
 
   char* seckeypath;
   char* passphrase;
@@ -91,11 +85,7 @@ c4gh_file_handle_free(struct c4gh_file *node)
 
 
 static void *
-#ifdef __APPLE__
-c4gh_init(struct fuse_conn_info *conn)
-#else
 c4gh_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
-#endif
 {
   D1("INIT");
   void *res = NULL;
@@ -103,15 +93,10 @@ c4gh_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
   /* Create the inode->path hash table */
   pthread_mutex_init(&c4gh.lock, NULL);
 
-#ifdef __APPLE__
-  if(c4gh.next_oper->init)
-    res = c4gh.next_oper->init(conn);
-#else
   if(c4gh.next_oper->init)
     res = c4gh.next_oper->init(conn, cfg);
 
   cfg->nullpath_ok = 0; // c4gh requires a path for each request
-#endif
 
   return res;
 }
@@ -128,28 +113,7 @@ c4gh_destroy(void *userdata)
   sodium_memzero(c4gh.pubkey, crypto_kx_PUBLICKEYBYTES);
 }
 
-static inline size_t
-c4gh_decrypted_size(size_t encrypted_filesize, unsigned int header_size)
-{
-  if(encrypted_filesize < header_size)
-    return 0;
-  size_t size = encrypted_filesize - header_size;
-  off_t nsegments = size / CRYPT4GH_CIPHERSEGMENT_SIZE + (size % CRYPT4GH_CIPHERSEGMENT_SIZE != 0);
-  return size - (nsegments * CIPHER_DIFF);
-}
-
-size_t
-c4gh_size(size_t encrypted_filesize)
-{
-  pthread_mutex_lock(&c4gh.lock);
-  size_t res = c4gh_decrypted_size(encrypted_filesize, c4gh.header_size);
-  pthread_mutex_unlock(&c4gh.lock);
-  return res;
-}
-
-static inline int update_header_hint(const char* path);
 static inline int c4gh_fetch_header(const char* path, uint8_t **h, unsigned int *hlen, struct fuse_file_info *fi);
-
 
 static int
 is_dotted(const char *p)
@@ -167,11 +131,7 @@ is_dotted(const char *p)
 }
 
 static int
-#ifdef __APPLE__
-c4gh_getattr(const char *path, struct stat *stbuf)
-#else
 c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
-#endif
 {
 
   if(path && is_dotted(path)){
@@ -181,7 +141,6 @@ c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 
   D1("GETATTR %s", path);
 
-#ifndef __APPLE__
   /* fi will always be NULL if the file is not currently open, but may also be NULL if the file is open.
    *
    * Therefore, we do the following dance and put back the underlying fi as it should be
@@ -198,7 +157,6 @@ c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 
   if(cfi)
     fi_copy.fh = cfi->fi.fh;
-#endif
 
   /* This is a bit ugly. Someone please help.
    * We don't know when we should add the .c4gh extension.
@@ -210,36 +168,23 @@ c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 
   int err = 0;
   size_t plen = strlen(path);
+  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
 
   if(plen < sizeof("/EGADxxxxxxxxxxx")){
     D2("passing through");
-#ifdef __APPLE__
-    err = c4gh.next_oper->getattr(path, stbuf);
-#else
     err = c4gh.next_oper->getattr(path, stbuf, fi2);
-#endif
   } else {
     D2("adding extension");
-    char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
     memcpy(c4gh_path, path, plen);
     memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
     c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
-#ifdef __APPLE__
-    err = c4gh.next_oper->getattr(c4gh_path, stbuf);
-#else
     err = c4gh.next_oper->getattr(c4gh_path, stbuf, fi2);
-#endif
   }
 
   /* adjust the size if it's a file */
   if(!err && S_ISREG(stbuf->st_mode)){ 
     pthread_mutex_lock(&c4gh.lock);
-    D2("updating filesize | header hint: %u", c4gh.header_size);
-    if(c4gh.header_size == 0){ /* update once */
-      err = update_header_hint(path);
-    }
-    stbuf->st_size = c4gh_decrypted_size(stbuf->st_size, c4gh.header_size); /* header size = hint */
-    pthread_mutex_unlock(&c4gh.lock);
+    stbuf->st_size = sshfs_decrypted_size(c4gh_path);
   }
 
   stbuf->st_uid = getuid();
@@ -311,17 +256,6 @@ c4gh_release(const char *path, struct fuse_file_info *fi)
   c4gh_file_handle_free(cfi);
 
   return err;
-}
-
-static inline void
-update_header_size(unsigned int hsize)
-{
-  //if(c4gh.header_size) /* we can do that outside the critical section, cuz we only increase the header_size */
-  //  return;            /* that means we reset it once */
-  pthread_mutex_lock(&c4gh.lock);
-  if(hsize > c4gh.header_size)
-    c4gh.header_size = hsize;
-  pthread_mutex_unlock(&c4gh.lock);
 }
 
 static int
@@ -432,36 +366,6 @@ error:
   return err;
 }
 
-static inline int
-update_header_hint(const char* path)
-{
-  D2("old header hint: %u", c4gh.header_size);
-  
-  /* Add the extension */
-  unsigned int len = strlen(path);
-  char c4gh_path[len+CRYPTGH_EXT_LEN+1];
-  memcpy(c4gh_path, path, len);
-  memcpy(c4gh_path+len, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
-  c4gh_path[len+CRYPTGH_EXT_LEN] = '\0';
-
-  /* Open, fetch, close */
-  struct fuse_file_info sfi;
-  memset(&sfi, 0, sizeof(sfi));
-  sfi.flags = O_RDONLY;
-  D2("opening header hint: %u", c4gh.header_size);
-  int err = c4gh.next_oper->open(c4gh_path, &sfi);
-  if(err) return err;
-
-  if(c4gh_fetch_header(c4gh_path, NULL, &len, &sfi))
-    err = -EPERM;
-
-  err = c4gh.next_oper->release(c4gh_path, &sfi);
-
-  c4gh.header_size = len;
-  D2("new header hint: %u", c4gh.header_size);
-  return err;
-}
-
 
 static inline int
 c4gh_open_header(const char* path, struct c4gh_file *cfi)
@@ -476,11 +380,8 @@ c4gh_open_header(const char* path, struct c4gh_file *cfi)
     return 1;
 
   D3("Encrypted filesize: %zu", cfi->encrypted_filesize);
-  cfi->filesize = c4gh_decrypted_size(cfi->encrypted_filesize, cfi->header_size);
+  cfi->filesize = sshfs_decrypted_size(path);
   D3("Decrypted filesize: %zu", cfi->filesize);
-
-  /* Update the header size hint */
-  update_header_size(cfi->header_size);
 
   D3("Number of keys: %d", cfi->nkeys);
   return 0;
@@ -736,11 +637,7 @@ remove_extension(const char *name)
 }
 
 static int
-#ifdef __APPLE__
-c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off)
-#else
 c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, enum fuse_fill_dir_flags flags)
-#endif
 {
   D2("FILLER %s", name);
 
@@ -750,11 +647,7 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
   if(!stbuf){
     char *dname = remove_extension(name);
     if(dname){
-#ifdef __APPLE__
-      err = h->filler(h->buf, dname, stbuf, off);
-#else
       err = h->filler(h->buf, dname, stbuf, off, flags);
-#endif
       free(dname);
     }
     return err;
@@ -768,11 +661,7 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
 
   if(!S_ISREG(s.st_mode)){ /* not a reg file */
     D2("FILLER | not a regular file");
-#ifdef __APPLE__
-    return h->filler(h->buf, name, &s, off);
-#else
     return h->filler(h->buf, name, &s, off, flags);
-#endif
   }
 	
   /* It's a file: adjust name and size */
@@ -781,35 +670,22 @@ c4gh_filler(void *buf, const char *name, const struct stat *stbuf, off_t off, en
   if(dname){
     s.st_size = c4gh_size(stbuf->st_size); 
     D2("FILLER with name: %s | decrypted size: " OFF_FMT, dname, s.st_size);
-#ifdef __APPLE__
-    err = h->filler(h->buf, dname, &s, off);
-#else
     err = h->filler(h->buf, dname, &s, off, flags);
-#endif
     free(dname);
   }
   return err;
 }
 
 static int
-#ifdef __APPLE__
-c4gh_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-	     off_t offset, struct fuse_file_info *fi)
-#else
 c4gh_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	     off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
-#endif
 {
   D1("READDIR %s | offset: " OFF_FMT, path, offset);
   struct c4gh_readdir_handle h;
   //h.path = path,
   h.buf = buf;
   h.filler = filler;
-#ifdef __APPLE__
-  return c4gh.next_oper->readdir(path, &h, c4gh_filler, offset, fi);
-#else
   return c4gh.next_oper->readdir(path, &h, c4gh_filler, offset, fi, flags);
-#endif
 }
 
 static int c4gh_statfs(const char *path, struct statvfs *buf)
@@ -819,6 +695,29 @@ static int c4gh_statfs(const char *path, struct statvfs *buf)
 
   /* todo: correct the sizes */
   return err;
+}
+
+
+static int
+c4gh_listxattr(const char *path, char *list, size_t size)
+{
+  size_t plen = strlen(path);
+  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+  memcpy(c4gh_path, path, plen);
+  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+  return c4gh.next_oper->listxattr(c4gh_path, list, size);
+}
+
+static int
+c4gh_getxattr(const char *path, const char *name, char* value, size_t size)
+{
+  size_t plen = strlen(path);
+  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+  memcpy(c4gh_path, path, plen);
+  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+  return c4gh.next_oper->getxattr(c4gh_path, name, value, size);
 }
 
 
@@ -844,12 +743,8 @@ c4gh_wrap(struct fuse_operations *oper)
 
   //c4gh_oper.statfs     = oper->statfs ? c4gh_statfs : NULL;
 
-#ifdef __APPLE__
-#if FUSE_VERSION >= 29
-  c4gh_oper.flag_nullpath_ok = 0;
-  c4gh_oper.flag_nopath = 0;
-#endif
-#endif
+  c4gh_oper.listxattr  = oper->listxattr ? c4gh_listxattr : NULL;
+  c4gh_oper.getxattr  = oper->getxattr ? c4gh_getxattr : NULL;
 
   return &c4gh_oper;
 }
@@ -973,7 +868,6 @@ void c4ghfs_print_options(void)
 "    -o seckey=<path>       path to the Crypt4GH secret key\n"
 "    -o passphrase_from_env=<ENVVAR>\n"
 "                           read passphrase from environment variable <ENVVAR>\n"
-"    -o header_size=<SIZE>  hint for the header sizes\n"
 );
 }
 
@@ -986,7 +880,6 @@ static struct fuse_opt c4gh_opts[] = {
 
     C4GH_OPT("seckey=%s"             , seckeypath         , 0),
     C4GH_OPT("passphrase_from_env=%s", passphrase_from_env, 0),
-    C4GH_OPT("header_size=%u"        , header_size        , 0), /* preset it */
 
     FUSE_OPT_END
 };
@@ -998,7 +891,6 @@ c4ghfs_parse_options(struct fuse_args *args)
   int res = 0;
 
   memset(&c4gh, 0, sizeof(struct c4gh));
-  c4gh.header_size = DEFAULT_HEADER_SIZE;
 
   if(fuse_opt_parse(args, &c4gh, c4gh_opts, NULL))
     return 1;

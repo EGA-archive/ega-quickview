@@ -47,11 +47,7 @@
 #include <strings.h>
 #include <libgen.h>
 
-#ifdef __APPLE__
-#include "compat/darwin_compat.h"
-#else
 #include <semaphore.h>
-#endif
 
 #ifdef HAVE_PWD_H
 #include <pwd.h>
@@ -63,13 +59,8 @@
 
 #include <sodium.h>
 
-#ifdef __APPLE__
-#define OFF_FMT "%lld"
-#define INO_FMT "%llu"
-#else
 #define OFF_FMT "%lu"
 #define INO_FMT "%lu"
-#endif
 
 #ifndef _PATH_TTY
 # define _PATH_TTY "/dev/tty"
