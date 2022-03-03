@@ -1,11 +1,7 @@
 # EGA-QuickView
 
 EGA-QuickView is a FUSE file system to access EGA files remotely. It
-works on Linux and macOS 12.  (macOS 11 has
-[bugs](https://github.com/osxfuse/osxfuse/issues/779#issuecomment-772890544),
-and on M1, [it seems you need to run in "reduced security mode",
-otherwise third-party kernel extensions cannot be
-loaded](https://github.com/osxfuse/osxfuse/issues/779#issuecomment-801761709)).
+works on Linux and [macOS 12](https://github.com/EGA-archive/ega-quickview-mac).
 
 From the [libfuse description](https://github.com/libfuse/libfuse/blob/master/README.md):
 
@@ -13,11 +9,13 @@ From the [libfuse description](https://github.com/libfuse/libfuse/blob/master/RE
 > programs to export a filesystem to the Linux kernel. The FUSE
 > project consists of two components: the fuse kernel module
 > (maintained in the regular kernel repositories) and the libfuse
-> userspace library (maintained in [this repository](https://github.com/libfuse/libfuse)). libfuse provides
+> userspace library [...]. libfuse provides
 > the reference implementation for communicating with the FUSE kernel
 > module.
 
-EGA-QuickView is a combination of sshfs and crypt4ghfs. That is, we
+EGA-QuickView is a combination of
+[sshfs](https://github.com/libfuse/sshfs) and
+[crypt4ghfs](https://github.com/EGA-archive/crypt4ghfs). That is, we
 communicate with the EGA distribution servers over ssh, download files
 (chunk by chunk) in Crypt4GH format and decrypt them transparently.
 
@@ -31,11 +29,11 @@ solution, and decrypt the files locally with [Crypt4GH](https://crypt4gh.readthe
 
 We need a few required packages (gcc, make, libsodium, libfuse, autoconf...)
 
-    # On Linux (Debian-like)
+    # On Debian-like systems
 	apt install libfuse3-dev autoconf gcc make pkg-config libsodium-dev libssl-dev libglib2.0-dev
 
-    # On macOS
-	brew install macfuse autoconf automake gcc make pkg-config libsodium openssl@1.1 glib
+    # On others
+	# TODO
 
 
 You can then compile the EGA-qv code with:
@@ -43,8 +41,6 @@ You can then compile the EGA-qv code with:
 	autoreconf -i
 	./configure
 	make
-
-On macOS, you might need to call `./configure --with-openssl=$(brew --prefix openssl@1.1)` instead, if you can't find Openssl.
 
 ## Example
 
