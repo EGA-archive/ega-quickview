@@ -234,7 +234,7 @@ int main(int argc, char *argv[])
   if(base_path_len > 0){
     char* last = config.base_path + base_path_len - 1;
     if(*last == '/')
-      *last == '\0';
+      *last = '\0';
   }
 
   /* Stack up the file systems */

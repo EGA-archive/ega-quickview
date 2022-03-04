@@ -1,9 +1,11 @@
 
-CC       = @CC@
-CPPFLAGS = -Isrc -Ikeys/include @CPPFLAGS@ -fPIC
-CFLAGS   = -Wno-unused-result @CFLAGS@ @CPPFLAGS@ @DEFS@ @DEBUG@
-LIBS     = @LIBS@
-LDFLAGS  = @LDFLAGS@ -Lkeys -lc4gh-keys -Lkeys/openssh -lopenssh -Lkeys/openbsd-compat -lopenbsd-compat
+CC      = @CC@
+CPPFLAGS= -Isrc -Ikeys/include @CPPFLAGS@ -fPIC
+CFLAGS  = -Wno-unused-result @CFLAGS@ @CPPFLAGS@ @DEFS@ @DEBUG@
+LIBS    = @LIBS@
+LDFLAGS = @LDFLAGS@ -Lkeys -lc4gh-keys -Lkeys/openssh -lopenssh -Lkeys/openbsd-compat -lopenbsd-compat
+#INSTALL = @INSTALL@
+INSTALL = /usr/bin/install -c
 
 EXTRA_LIBS = keys/libc4gh-keys.a keys/openssh/libopenssh.a keys/openbsd-compat/libopenbsd-compat.a
 
@@ -40,6 +42,9 @@ $(TARGET): $(OBJS) $(EXTRA_LIBS)
 clean:
 	-rm -f $(OBJS) $(TARGET)
 	-@rm -f *~ 
+
+install: $(TARGET)
+	$(INSTALL) -m 0755 $(TARGET) $(bindir)/$(TARGET)
 
 veryclean: clean
 	-make -C keys veryclean
