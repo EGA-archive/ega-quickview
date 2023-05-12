@@ -57,6 +57,13 @@
 #include <grp.h>
 #endif
 
+#ifdef HAVE_SYS_XATTR_H
+#include <sys/xattr.h>
+#endif
+#ifndef ENOATTR
+#define ENOATTR ENODATA
+#endif
+
 #include <sodium.h>
 
 #define OFF_FMT "%lu"
@@ -131,6 +138,13 @@
 #define SSH_FX_CONNECTION_LOST               7
 #define SSH_FX_OP_UNSUPPORTED                8
 
+#define SSH_FX_ENOATTR                 9
+#define SSH_FX_ENOSPC                 10
+#define SSH_FX_ENOTSUP                11
+#define SSH_FX_ERANGE                 12
+#define SSH_FX_EMSGSIZE               13
+
+
 #define SSH_FXF_READ            0x00000001
 #define SSH_FXF_WRITE           0x00000002
 #define SSH_FXF_APPEND          0x00000004
@@ -146,6 +160,8 @@
 #define SFTP_EXT_STATVFS "statvfs@openssh.com"
 #define SFTP_EXT_HARDLINK "hardlink@openssh.com"
 #define SFTP_EXT_FSYNC "fsync@openssh.com"
+#define SFTP_EXT_LISTXATTR "listxattr@ega-archive.org"
+#define SFTP_EXT_GETXATTR "getxattr@ega-archive.org"
 
 #define PROTO_VERSION 3
 

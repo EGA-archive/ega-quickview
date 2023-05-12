@@ -34,6 +34,8 @@ static struct c4gh c4gh;
 
 struct c4gh_file {
 
+  int no_extension;
+
   /* underlying file handle */
   struct fuse_file_info fi;
   int fh;
@@ -114,6 +116,7 @@ c4gh_destroy(void *userdata)
 
 static inline int c4gh_fetch_header(const char* path, uint8_t **h, unsigned int *hlen, struct fuse_file_info *fi);
 
+#if 0
 static int
 is_dotted(const char *p)
 //__attribute__((nonnull))
@@ -128,15 +131,18 @@ is_dotted(const char *p)
     p++;
   }
 }
+#endif
 
 static int
 c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 {
 
+#if 0
   if(path && is_dotted(path)){
     D2("NOPE ---------------- %s\n", path);
     return -ENOENT;
   }
+#endif
 
   D1("GETATTR %s", path);
 
@@ -167,13 +173,13 @@ c4gh_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 
   int err = 0;
   size_t plen = strlen(path);
-  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
 
-  if(plen < sizeof("/EGADxxxxxxxxxxx")){
-    D2("passing through");
+  if(plen < sizeof("/EGADxxxxxxxxxxx")){ /* works for the desktop icon too */
+    D3("passing through");
     err = c4gh.next_oper->getattr(path, stbuf, fi2);
   } else {
-    D2("adding extension");
+    D3("adding %s extension", CRYPTGH_EXT);
+    char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
     memcpy(c4gh_path, path, plen);
     memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
     c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
@@ -197,13 +203,18 @@ c4gh_open(const char *path, struct fuse_file_info *fi)
 
   cfi->fi = *fi; /* shallow copy */
 
-  size_t plen = strlen(path);
-  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
-  memcpy(c4gh_path, path, plen);
-  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
-  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
-
-  int err = c4gh.next_oper->open(c4gh_path, &cfi->fi);
+  int err = 0;
+  if(strcmp(path, "/.desktop") == 0){
+    err = c4gh.next_oper->open(path, &cfi->fi);
+    cfi->no_extension = 1;
+  } else {
+    size_t plen = strlen(path);
+    char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+    memcpy(c4gh_path, path, plen);
+    memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+    c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+    err = c4gh.next_oper->open(c4gh_path, &cfi->fi);
+  }
 
   if(err){
     E("Open failed: %d", err);
@@ -213,7 +224,6 @@ c4gh_open(const char *path, struct fuse_file_info *fi)
 
   struct sshfs_file *sshfh = (struct sshfs_file*)cfi->fi.fh;
   cfi->filesize = sshfh->filesize;
-
 
   if(!config.singlethread)
     pthread_mutex_init(&cfi->lock, NULL);
@@ -238,13 +248,18 @@ c4gh_release(const char *path, struct fuse_file_info *fi)
 
   struct c4gh_file *cfi = (struct c4gh_file *)fi->fh;
 
-  size_t plen = strlen(path);
-  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
-  memcpy(c4gh_path, path, plen);
-  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
-  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+  int err = 0;
 
-  int err = c4gh.next_oper->release(c4gh_path, &cfi->fi);
+  if(cfi->no_extension){
+    err = c4gh.next_oper->release(path, &cfi->fi);
+  } else {
+    size_t plen = strlen(path);
+    char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+    memcpy(c4gh_path, path, plen);
+    memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+    c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+    err = c4gh.next_oper->release(c4gh_path, &cfi->fi);
+  }
 
   c4gh_file_handle_free(cfi);
 
@@ -260,8 +275,8 @@ c4gh_fetch_header(const char *path,
   D2("Fetch header of %s", path);
 
   /*
-   * TODO: Pull c4gh.header_size if it's already set.
-   * For the moment, we pull the bytes little at a time.
+   * TODO: Fetch c4gh.header_size bytes if it's already set.
+   * For the moment, we fetch the bytes little at a time.
    */
 
   char *header = NULL, *p = NULL;
@@ -467,19 +482,12 @@ __attribute__((nonnull))
 }
 
 static int
-c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+c4gh_read_and_decrypt(const char *c4gh_path, char *buf, size_t size, off_t offset, struct c4gh_file *cfi)
 {
 
-  D1("READ offset: " OFF_FMT " | size: %zu | %s", offset, size, path);
+  D1("READ offset: " OFF_FMT " | size: %zu | %s", offset, size, c4gh_path);
 
   int err = -EIO;
-  struct c4gh_file *cfi = (struct c4gh_file*) fi->fh;
-
-  size_t plen = strlen(path);
-  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
-  memcpy(c4gh_path, path, plen);
-  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
-  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
 
   /* Check if we already have the header */
   if(cfi->header == NULL && c4gh_open_header(c4gh_path, cfi)){
@@ -487,6 +495,10 @@ c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_fi
     return -EPERM;
   }
 
+  if(!cfi->nkeys){
+    E("No session keys found: decryption failed");
+    return -EPERM;
+  }
   D3("Number of keys: %d", cfi->nkeys);
 
   /* Check if the offset and requested size are within the file boundaries */
@@ -585,6 +597,25 @@ done:
 }
 
 
+static int
+c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+{
+
+  struct c4gh_file *cfi = (struct c4gh_file*) fi->fh;
+
+  if(cfi->no_extension)
+    return c4gh.next_oper->read(path, buf, size, offset, &cfi->fi);
+
+  size_t plen = strlen(path);
+  char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+  memcpy(c4gh_path, path, plen);
+  memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+  c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+  return c4gh_read_and_decrypt(c4gh_path, buf, size, offset, cfi);
+}
+
+
+
 /*********************************************
  *
  * Directories
@@ -678,6 +709,80 @@ static int c4gh_statfs(const char *path, struct statvfs *buf)
   return err;
 }
 
+static int
+c4gh_getxattr(const char *path, const char* name, char *value, size_t size)
+{
+
+  /* We get lots of:
+     - "security.selinux"
+     - "system.posix_acl_access"
+     - "system.posix_acl_default"
+     so we only answer to "user.decrypted_filesize".
+     Alternatively, we could only allow the user.* extended attributes
+  */
+  if(strcmp(name, "user.decrypted_filesize"))
+    return -ENODATA;
+
+  D1("GETXATTR %s | name: %s | size: %zu", path, name, size);
+
+  /* This is a bit ugly. Someone please help.
+   * We don't know when we should add the .c4gh extension.
+   * We, so far, hard-code that EGA datasets are the top level directories
+   * and that we have .c4gh files, and only files, in them.
+   * Therefore, if the path length is greater than "/EGADxxxxxxxxxxx/"
+   * we don't add the extension. Otherwise, we always do.
+   */
+
+  int err = 0;
+  size_t plen = strlen(path);
+
+  if(plen < sizeof("/EGADxxxxxxxxxxx")){
+    D3("passing through");
+    err = c4gh.next_oper->getxattr(path, name, value, size);
+  } else {
+    D3("adding %s extension", CRYPTGH_EXT);
+    char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+    memcpy(c4gh_path, path, plen);
+    memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+    c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+    err = c4gh.next_oper->getxattr(c4gh_path, name, value, size);
+  }
+
+  return err;
+}
+
+static int
+c4gh_listxattr(const char *path, char* names, size_t size)
+{
+
+  D1("LISTXATTR %s | size: %zu", path, size);
+
+  /* This is a bit ugly. Someone please help.
+   * We don't know when we should add the .c4gh extension.
+   * We, so far, hard-code that EGA datasets are the top level directories
+   * and that we have .c4gh files, and only files, in them.
+   * Therefore, if the path length is greater than "/EGADxxxxxxxxxxx/"
+   * we don't add the extension. Otherwise, we always do.
+   */
+
+  int err = 0;
+  size_t plen = strlen(path);
+
+  if(plen < sizeof("/EGADxxxxxxxxxxx")){
+    D3("passing through");
+    err = c4gh.next_oper->listxattr(path, names, size);
+  } else {
+    D3("adding %s extension", CRYPTGH_EXT);
+    char c4gh_path[plen+CRYPTGH_EXT_LEN+1];
+    memcpy(c4gh_path, path, plen);
+    memcpy(c4gh_path+plen, CRYPTGH_EXT, CRYPTGH_EXT_LEN);
+    c4gh_path[plen+CRYPTGH_EXT_LEN] = '\0';
+    err = c4gh.next_oper->listxattr(c4gh_path, names, size);
+  }
+
+  return err;
+}
+
 
 struct fuse_operations *
 c4gh_wrap(struct fuse_operations *oper)
@@ -690,6 +795,8 @@ c4gh_wrap(struct fuse_operations *oper)
   c4gh_oper.init       = c4gh_init;
   c4gh_oper.destroy    = c4gh_destroy;
   c4gh_oper.getattr    = c4gh_getattr;
+  c4gh_oper.listxattr  = c4gh_listxattr;
+  c4gh_oper.getxattr   = c4gh_getxattr;
 
   c4gh_oper.opendir    = oper->opendir;
   c4gh_oper.readdir    = oper->readdir ? c4gh_readdir : NULL;

@@ -1,7 +1,7 @@
 # EGA-QuickView
 
 EGA-QuickView is a FUSE file system to access EGA files remotely. It
-works on Linux and [macOS 12](https://github.com/EGA-archive/ega-quickview-mac).
+works on Linux and [macOS 12](https://github.com/EGA-archive/ega-quickview-macos).
 
 From the [libfuse description](https://github.com/libfuse/libfuse/blob/master/README.md):
 

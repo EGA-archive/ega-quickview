@@ -1,6 +1,6 @@
 #include "includes.h"
 
-static unsigned int header_debug = 0;
+static unsigned int header_debug = 3;
 
 /* Debug color: Green */
 #define D1(format, ...) if(header_debug > 0) DEBUG_FUNC("\x1b[32m", "[HEADER]", format, ##__VA_ARGS__)

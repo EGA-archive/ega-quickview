@@ -162,6 +162,8 @@ struct sshfs {
 	pthread_cond_t outstanding_cond;
 
 	int ext_statvfs;
+        int ext_getxattr;
+        int ext_listxattr;
 
 	/* statistics */
 	uint64_t bytes_sent;
@@ -534,10 +536,12 @@ static int buf_get_attrs(struct buffer *buf, struct stat *stbuf, int *flagsp)
 		      if (buf_get_string(buf, &value) == -1)
 			return -EIO;
 
-		      /* Only exists for files */
-		      if(strcmp(key, "decrypted_filesize") == 0){
-			D3("decrypted_filesize: %s", value);
-			decrypted_filesize = strtoull(value, NULL, 10);
+		      if(sshfs.ext_getxattr){
+			/* Only exists for files */
+			if(strcmp(key, "decrypted_filesize") == 0){
+			  D3("decrypted_filesize: %s", value);
+			  decrypted_filesize = strtoull(value, NULL, 10);
+			}
 		      }
 		      if(key) free(key);
 		      if(value) free(value);
@@ -548,7 +552,7 @@ static int buf_get_attrs(struct buffer *buf, struct stat *stbuf, int *flagsp)
 	stbuf->st_ino = ino;
 	stbuf->st_mode = mode;
 	stbuf->st_nlink = 1;
-	if(config.c4gh_decrypt && decrypted_filesize) /* check S_ISREG(mode) */
+	if(config.c4gh_decrypt && sshfs.ext_getxattr && decrypted_filesize) /* check S_ISREG(mode) */
 	  stbuf->st_size = decrypted_filesize;
 	else
 	  stbuf->st_size = size;
@@ -1151,11 +1155,23 @@ static int sftp_init_reply_ok(struct conn *conn, struct buffer *buf,
 			    strcmp(extdata, "2") == 0)
 				sshfs.ext_statvfs = 1;
 
+			if (strcmp(ext, SFTP_EXT_GETXATTR) == 0 &&
+			    strcmp(extdata, "1") == 0)
+			        sshfs.ext_getxattr = 1;
+
+			if (strcmp(ext, SFTP_EXT_LISTXATTR) == 0 &&
+			    strcmp(extdata, "1") == 0)
+			        sshfs.ext_listxattr = 1;
+
 			free(ext);
 			free(extdata);
 		} while (buf2.len < buf2.size);
 		buf_free(&buf2);
 	}
+
+	D1("getxattr extension supported: %s", (sshfs.ext_getxattr)?"yes":"no");
+	D1("listxattr extension supported: %s", (sshfs.ext_listxattr)?"yes":"no");
+
 	return 0;
 }
 
@@ -1221,6 +1237,14 @@ static int sftp_error_to_errno(uint32_t error)
 	case SSH_FX_NO_CONNECTION:     return ENOTCONN;
 	case SSH_FX_CONNECTION_LOST:   return ECONNABORTED;
 	case SSH_FX_OP_UNSUPPORTED:    return EOPNOTSUPP;
+
+	/* listxattr/getxattr */
+	case SSH_FX_ENOATTR: return ENOATTR;
+	case SSH_FX_ENOSPC: return ENOSPC;
+	case SSH_FX_ENOTSUP: return ENOTSUP;
+	case SSH_FX_ERANGE: return ERANGE;
+	case SSH_FX_EMSGSIZE: return EMSGSIZE;
+
 	default:                       return EIO;
 	}
 }
@@ -2136,6 +2160,119 @@ static int sshfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_
 	return err;
 }
 
+static int
+sshfs_listxattr(const char *path, char *names, size_t size)
+{
+  if(!sshfs.ext_listxattr)
+    return -ENOSYS;
+
+  D1("listxattr %s | size=%zu", path, size);
+
+  int err;
+  struct buffer buf;
+  struct buffer outbuf;
+  buf_init(&buf, 0);
+  buf_add_string(&buf, SFTP_EXT_LISTXATTR);
+  buf_add_path(&buf, path);
+
+  err = sftp_request(get_conn(NULL, NULL),
+		     SSH_FXP_EXTENDED, &buf,
+		     SSH_FXP_EXTENDED_REPLY, &outbuf);
+
+  if (!err) {
+  
+    if(size == 0){
+      if (buf_get_uint64(&outbuf, &size) == -1) /* reuse */
+	err = -EIO;
+      else 
+	err = size;
+
+    } else {
+
+      char *v;
+      if (buf_get_string(&outbuf, &v) == -1)
+	err = -EIO;
+      else {
+	if(size < strlen(v)) /* v is NULL-terminated */
+	  err = -ERANGE;
+	else
+	  memcpy(names, v, size);
+      }
+      buf_free(&outbuf);
+    }
+  }
+  buf_free(&buf);
+  return err;
+}
+
+static int
+sshfs_getxattr(const char *path, const char *name, char *value, size_t size)
+{
+  D1("GETXATTR %s | name: %s | size=%zu", path, name, size);
+
+  if(!sshfs.ext_getxattr)
+    return -ENOSYS;
+
+  /* We get lots of:
+     - "security.selinux"
+     - "system.posix_acl_access"
+     - "system.posix_acl_default"
+     so we only answer to "user.decrypted_filesize".
+     Alternatively, we could only allow the user.* extended attributes
+  */
+  if(strcmp(name, "user.decrypted_filesize"))
+    return -ENODATA;
+
+  int err;
+  struct buffer buf;
+  struct buffer outbuf;
+  buf_init(&buf, 0);
+  buf_add_string(&buf, SFTP_EXT_GETXATTR);
+  buf_add_string(&buf, name);
+  buf_add_path(&buf, path);
+  buf_add_uint64(&buf, size);
+
+  err = sftp_request(get_conn(NULL, NULL),
+		     SSH_FXP_EXTENDED, &buf,
+		     SSH_FXP_EXTENDED_REPLY, &outbuf);
+  buf_free(&buf);
+
+  if (err)
+    return err; /* no outbuf on error */
+  
+  if(size == 0){
+    if (buf_get_uint64(&outbuf, &size) == -1) /* reuse */
+      err = -EIO;
+    else {
+      err = size;
+      D1("GETXATTR %s | got size: %lu", path, size);
+      if(size < 0)
+	err = -EIO;
+    }
+    
+  } else {
+
+    char *v;
+    if (buf_get_string(&outbuf, &v) == -1)
+      err = -EIO;
+    else {
+      if(size < strlen(v)){ /* v is NULL-terminated */
+	D1("GETXATTR %s | v: %s | size: %zu | too small", path, v, size);
+	err = -ERANGE; /* shouldn't be the case */
+      } else {
+	memset(value, '\0', size);
+	memcpy(value, v, size);
+	D1("GETXATTR %s | value: %s | size: %zu", path, value, size);
+	err = size; /* success */
+      }
+    }
+  }
+  buf_free(&outbuf);
+  return err;
+}
+
+
+
 static int processing_init(void)
 {
 	int i;
@@ -2322,6 +2459,8 @@ struct fuse_operations sshfs_oper = {
   .release    = sshfs_release,
   .read       = sshfs_read,
   .statfs     = sshfs_statfs,
+  .listxattr  = sshfs_listxattr,
+  .getxattr   = sshfs_getxattr,
 };
 
 void sshfs_print_options(void)
