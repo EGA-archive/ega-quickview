@@ -225,6 +225,8 @@ c4gh_open(const char *path, struct fuse_file_info *fi)
   struct sshfs_file *sshfh = (struct sshfs_file*)cfi->fi.fh;
   cfi->filesize = sshfh->filesize;
 
+  D2("filesize: %zu", cfi->filesize);
+
   if(!config.singlethread)
     pthread_mutex_init(&cfi->lock, NULL);
 
@@ -485,7 +487,7 @@ static int
 c4gh_read_and_decrypt(const char *c4gh_path, char *buf, size_t size, off_t offset, struct c4gh_file *cfi)
 {
 
-  D1("READ offset: " OFF_FMT " | size: %zu | %s", offset, size, c4gh_path);
+  D1("READ (encrypted) offset: " OFF_FMT " | size: %zu | %s", offset, size, c4gh_path);
 
   int err = -EIO;
 
@@ -500,20 +502,6 @@ c4gh_read_and_decrypt(const char *c4gh_path, char *buf, size_t size, off_t offse
     return -EPERM;
   }
   D3("Number of keys: %d", cfi->nkeys);
-
-  /* Check if the offset and requested size are within the file boundaries */
-  /* filesize is calculated _after_ opening the header */
-  ssize_t end = cfi->filesize - offset;
-
-  if(end <= 0){ /* Reading passed the end */
-    D2("Reading passed the end: offset " OFF_FMT " > filesize: %zu", offset, cfi->filesize);
-    return 0;
-  }
-
-  if(size > end){ /* reset */
-    D2("Reading too many bytes passed the end | scaling down %zu to %zu", size, (size_t)end);
-    size = end;
-  }
 
   /* Determine the number of segments spanning the request */
   size_t start_segment = offset / CRYPT4GH_SEGMENT_SIZE;
@@ -601,7 +589,23 @@ static int
 c4gh_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
 
+  D1("READ offset: " OFF_FMT " | size: %zu | %s", offset, size, path);
+
   struct c4gh_file *cfi = (struct c4gh_file*) fi->fh;
+
+  /* Check if the offset and requested size are within the file boundaries */
+  /* filesize is calculated _after_ opening the header */
+  ssize_t end = cfi->filesize - offset;
+
+  if(end <= 0){ /* Reading passed the end */
+    D2("Reading passed the end: offset " OFF_FMT " > filesize: %zu", offset, cfi->filesize);
+    return 0;
+  }
+
+  if(size > end){ /* reset */
+    D2("Reading too many bytes passed the end | scaling down %zu to %zu", size, (size_t)end);
+    size = end;
+  }
 
   if(cfi->no_extension)
     return c4gh.next_oper->read(path, buf, size, offset, &cfi->fi);
